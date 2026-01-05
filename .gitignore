@@ -1,10 +1,12 @@
 # --- Frontend (Vite/React) ---
 frontend/node_modules/
+frontend/.env
 frontend/dist/
 frontend/dist-ssr/
 frontend/*.local
 frontend/.vscode/
 !frontend/.vscode/extensions.json
+
 
 # --- Backend (Node.js/Express) ---
 backend/node_modules/
