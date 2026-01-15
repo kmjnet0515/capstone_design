@@ -7,7 +7,6 @@ frontend/*.local
 frontend/.vscode/
 !frontend/.vscode/extensions.json
 
-
 # --- Backend (Node.js/Express) ---
 backend/node_modules/
 backend/dist/

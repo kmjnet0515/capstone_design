@@ -2,7 +2,9 @@ import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import Header from './components/Header';
 import AnalysisPage from './pages/AnalysisPage';
 import RecommendationPage from './pages/RecommendationPage';
-
+import Login from "./components/Login"
+import Signup from './components/Signup';
+import Changepassword from './components/Changepassword';
 function App() {
   return (
     <Router>
@@ -13,6 +15,9 @@ function App() {
             <Route path="/" element={<AnalysisPage />} />
             <Route path="/analysis" element={<AnalysisPage />} />
             <Route path="/recommendation" element={<RecommendationPage />} />
+            <Route path="/login" element={<Login/>} />
+            <Route path="/signup" element={<Signup/>} />
+            <Route path="/changepassword" element={<Changepassword/>} />
           </Routes>
         </main>
       </div>

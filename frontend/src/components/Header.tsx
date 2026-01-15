@@ -1,5 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import { Search, User, Map, BarChart3 } from 'lucide-react';
+import Login from './Login';
 
 const Header = () => {
   const navigate = useNavigate();
@@ -21,7 +22,10 @@ const Header = () => {
 
       <div className="flex items-center gap-4">
         <Search className="cursor-pointer w-5 h-5 hover:text-gray-300" />
-        <User className="cursor-pointer w-5 h-5 hover:text-gray-300" />
+        <User 
+        className="cursor-pointer w-5 h-5 hover:text-gray-300"
+        onClick={ () => navigate('./login')}
+        />
       </div>
     </header>
   );
