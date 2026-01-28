@@ -1,5 +1,5 @@
 @import "tailwindcss";
-
+@plugin "@tailwindcss/typography";
 /* 레이아웃 초기화 */
 html, body, #root {
   height: 100%;

@@ -13,9 +13,12 @@
   "dependencies": {
     "axios": "^1.13.2",
     "cors": "^2.8.5",
+    "csv-parse": "^6.1.0",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
     "mysql2": "^3.16.0",
+    "openai": "^6.16.0",
+    "proj4": "^2.20.2",
     "xml2js": "^0.6.2"
   }
 }

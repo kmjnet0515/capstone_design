@@ -1,5 +1,5 @@
-import React from 'react';
-import {Loader2, MapPin } from 'lucide-react';
+import React, { useState } from 'react'; // useState 추가
+import {Loader2, MapPin, Search } from 'lucide-react';
 
 interface AnalysisSidebarProps {
   address: string;
@@ -15,12 +15,57 @@ interface AnalysisSidebarProps {
   onSelectMid: (cat: string) => void;
   onSelectSmall: (cat: string) => void;
   onStartAnalysis: () => void;
+  onAutoSelect: (hierarchy: { large: string; mid: string; small: string }) => void; // 자동 선택 함수 추가
 }
 
 const AnalysisSidebar: React.FC<AnalysisSidebarProps> = (p) => {
+  const [searchQuery, setSearchQuery] = useState("");
+  const [isSearching, setIsSearching] = useState(false);
+
+  const handleSearch = async () => {
+    if (!searchQuery.trim()) return;
+    setIsSearching(true);
+    try {
+      const res = await fetch(`http://localhost:3000/api/categories/search?query=${encodeURIComponent(searchQuery)}`);
+      const data = await res.json();
+      
+      if (data && data.hierarchy) {
+        p.onAutoSelect(data.hierarchy); // 부모 컴포넌트로 데이터 전달
+        setSearchQuery(""); // 검색창 초기화
+      } else {
+        alert("일치하는 업종을 찾을 수 없습니다.");
+      }
+    } catch (err) {
+      console.error("검색 실패:", err);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+  
   return (
   <aside className="w-95 bg-white border-r border-slate-100 p-8 flex flex-col shadow-xl z-10 overflow-y-auto shrink-0">
     <header className="mb-10"><h1 className="text-3xl font-black text-blue-950 italic">SBC 365</h1><p className="text-[11px] text-blue-600 font-bold uppercase mt-1.5">Market Analysis Tool</p></header>
+    <section className="mb-10">
+        <label className="text-[11px] font-black text-slate-400 mb-3 block uppercase tracking-widest">
+          AI 업종 빠른 검색
+        </label>
+        <div className="relative">
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+            placeholder="예: 커피, 삼겹살, 세탁소..."
+            className="w-full p-4 pr-12 border-2 border-slate-100 rounded-2xl text-sm font-bold focus:border-blue-600 outline-none transition-all placeholder:text-slate-300"
+          />
+          <button 
+            onClick={handleSearch}
+            className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-blue-600 transition-colors"
+          >
+            {isSearching ? <Loader2 className="animate-spin" size={20} /> : <Search size={20} />}
+          </button>
+        </div>
+      </section>
     <div className="space-y-10 flex-1">
       <section>
         <label className="text-[11px] font-black text-slate-400 mb-3 block uppercase tracking-widest">Selected Location</label>
