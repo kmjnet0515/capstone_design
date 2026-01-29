@@ -9,11 +9,13 @@ const app = express();
 const fs = require('fs');
 const path = require('path');
 const OpenAI = require('openai');
+const cron = require('node-cron');
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const VECTOR_CACHE_PATH = path.join(__dirname, 'category_vectors.json');
 let categoryVectors = [];
 
 const { parse } = require('csv-parse/sync');
+const { start } = require('repl');
 const csvPath = path.join(__dirname, '개방자치단체코드.csv');
 const fileContent = fs.readFileSync(csvPath, 'utf-8');
 const localDataList = parse(fileContent, {
@@ -41,6 +43,22 @@ const getTwoDaysAgo = () => {
 };
 const END_DATE = getTwoDaysAgo();
 
+cron.schedule('5 0 * * *', async () => {
+    console.log("🚀 [배치 작업] 일일 데이터 동기화 시작...");
+
+    const d = new Date();
+    
+    // END_DATE: 오늘 기준 2일 전 (예: 오늘 29일 -> 27일)
+    d.setDate(d.getDate() - 2);
+    const endDate = d.toISOString().split('T')[0].replace(/-/g, '');
+
+    // START_DATE: 오늘 기준 3일 전 (예: 오늘 29일 -> 26일)
+    // 이렇게 하면 26일 00시 ~ 27일 00시 사이의 하루치 '변동분'만 가져옵니다.
+    d.setDate(d.getDate() - 3);
+    const startDate = d.toISOString().split('T')[0].replace(/-/g, '');
+
+    await syncGovernmentData(startDate, endDate);
+});
 const TARGET_APIS = {
     "즉석판매제조가공업" : "instant_food_processors",
     "휴게음식점" : "rest_cafes",
@@ -1258,43 +1276,106 @@ app.get('/api/analysis/closed-blocks', async (req, res) => {
     try {
         // 1. DB에서 해당 범위 내 모든 데이터 조회 (영업 + 폐업)
         const [dbRows] = await pool.query(`
-            SELECT manage_num, status_code, lat, lng 
+            SELECT manage_num, status_code, lat, lng, biz_name 
             FROM gov_permit_info 
-            WHERE lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?
-        `, [minLat, maxLat, minLng, maxLng]);
+            WHERE lat BETWEEN ? AND ? AND lng BETWEEN ? AND ? AND (status_code = ? OR status_code = ?)
+        `, [minLat, maxLat, minLng, maxLng, 1, 3]);
 
         // 2. API에서 최신 변동분 조회 (영업 01, 폐업 03)
         // fetchRecentClosures와 유사하게 영업 데이터를 가져오는 로직이 필요합니다.
         // 여기서는 기존 fetchRecentClosures를 활용하여 '폐업' API 데이터를 우선 확보합니다.
-        const apiClosedData = await fetchRecentClosures(regionCode); 
+        const ed = getTwoDaysAgo();
+        
+        const [dbRes] = await pool.query(`
+            SELECT count(*) as c
+            FROM api_sync_log
+            WHERE sync_date = ? AND status = 'SUCCESS'
+        `, [ed]);
+        let apiClosedData = [];
+        if (dbRes[0].c === 0) {
+            console.log(`📡 [${ed}] 동기화 로그 없음. API 최신 변동분 호출 중...`);
+            apiClosedData = await fetchRecentClosures(regionCode); 
+        } else {
+            console.log(`✅ [${ed}] 이미 동기화된 날짜입니다. DB 데이터만 사용합니다.`);
+        }
 
-        // 3. 데이터 병합 (Map 사용)
-        const combinedMap = new Map();
+        
+        let rawDataList = [];
 
-        // 3-1. DB 데이터 적재 (기본 상태)
+        // 1-1. DB 데이터
         dbRows.forEach(row => {
-            combinedMap.set(row.manage_num, {
+            rawDataList.push({
+                manage_num: row.manage_num,
                 status: parseInt(row.status_code), // 1: 영업, 3: 폐업
-                lat: row.lat,
-                lng: row.lng
+                lat: parseFloat(row.lat),
+                lng: parseFloat(row.lng),
+                biz_name: row.biz_name ? row.biz_name.trim() : ""
             });
         });
 
-        // 3-2. API 데이터 덮어쓰기 (DB에는 영업중이어도 API에서 폐업이면 '폐업'으로 간주)
+        // 1-2. API 데이터 (폐업 정보가 있다면 해당 manage_num을 찾아 상태 업데이트하거나 리스트에 추가)
+        // * API 데이터가 DB에 없는 새로운 폐업 정보일 수도 있으므로 처리 필요
         apiClosedData.forEach(apiRow => {
-            // API 데이터의 manage_num이 있다면 매핑, 없다면 좌표 기반으로라도 체크 가능하나
-            // API 결과에 manage_num(mgtNo)이 포함되도록 fetch 함수를 수정하는 것이 좋습니다.
-            if (apiRow.manage_num) {
-                combinedMap.set(apiRow.manage_num, {
-                    status: 3, // 폐업 확정
-                    lat: apiRow.lat,
-                    lng: apiRow.lng
+            // 일단 API에서 온 건 '폐업(3)'으로 간주
+            rawDataList.push({
+                manage_num: apiRow.manage_num || "API_UNKNOWN", 
+                status: 3, 
+                lat: parseFloat(apiRow.lat),
+                lng: parseFloat(apiRow.lng),
+                biz_name: apiRow.name ? apiRow.name.trim() : "" 
+            });
+        });
+
+        // [단계 2] '가게 단위'로 그룹화 (중복 제거 핵심 로직)
+        const uniqueStoreMap = new Map();
+
+        // 좌표 소수점 반올림 함수 (미세한 오차로 다른 가게로 인식되는 것 방지, 약 1m 오차 허용)
+        const normalizeCoord = (val) => {
+            if (!val) return 0;
+            return Math.floor(val * 10000) / 10000; 
+        };
+
+        // 상호명 정규화 (공백 제거: '스타벅스 강남점' == '스타벅스강남점')
+        const normalizeName = (name) => {
+            if (!name) return "이름미상";
+            return name.replace(/\s+/g, '');
+        };
+
+        rawDataList.forEach((item) => {
+            // 1. 유니크 키 생성: "위도_경도_상호명"
+            const groupKey = `${normalizeCoord(item.lat)}_${normalizeCoord(item.lng)}_${normalizeName(item.biz_name)}`;
+
+            if (uniqueStoreMap.has(groupKey)) {
+                // 2. 이미 등록된 가게가 있다면? -> 상태를 병합합니다.
+                const existingStore = uniqueStoreMap.get(groupKey);
+                
+                // [중요 정책] 
+                // 여러 인허가 중 하나라도 '영업(1)' 상태라면, 이 가게는 영업 중인 것으로 판단합니다.
+                // 예: 담배권은 반납(폐업)했지만, 편의점 자체는 계속 운영 중일 수 있음.
+                if (item.status === 1) {
+                    existingStore.status = 1;
+                }
+                
+                // (선택) 어떤 인허가들이 묶였는지 디버깅용으로 저장
+                existingStore.permits.push(item.manage_num);
+                
+            } else {
+                // 3. 새로운 가게 발견 -> 맵에 등록
+                uniqueStoreMap.set(groupKey, {
+                    id: groupKey, 
+                    keyId: item.manage_num, // 대표 ID 하나만 저장
+                    status: item.status,
+                    lat: item.lat,
+                    lng: item.lng,
+                    biz_name: item.biz_name,
+                    permits: [item.manage_num]
                 });
             }
         });
 
-        const allPoints = Array.from(combinedMap.values());
-
+        // 최종 결과: 중복이 제거된 순수 가게 리스트
+        const allPoints = Array.from(uniqueStoreMap.values());
+        console.log(allPoints);
         // 4. 지적도 데이터 가져오기 (기존 루프 로직 유지)
         let allFeatures = [];
         let page = 1;
@@ -1411,6 +1492,8 @@ function isPointInPolygon(point, polygon) {
     return inside;
 }
 
+
+
 async function fetchCategoryWithPagination(apiPath, regionCode) {
     let categoryData = [];
     let pageNo = 1;
@@ -1462,4 +1545,137 @@ async function fetchCategoryWithPagination(apiPath, regionCode) {
     }
     return categoryData;
 }
+
+
+async function fetchApiData(apiPath, startDate, endDate, pageNo) {
+    const numOfRows = 100;
+    const url = `https://apis.data.go.kr/1741000/${apiPath}/info`;
+    
+    try {
+        const res = await axios.get(url, {
+            params: {
+                serviceKey: process.env.MOLIT_SERVICE_KEY,
+                pageNo: pageNo,
+                numOfRows: numOfRows,
+                "cond[LCPMT_YMD::GTE]": startDate,
+                "cond[LCPMT_YMD::LT]": endDate,
+                type: 'json'
+            },
+            timeout: 20000
+        });
+
+        const responseBody = res.data.response?.body;
+        const totalCount = Number(responseBody?.totalCount || 0);
+
+        if (!responseBody || !responseBody.items || totalCount === 0) {
+            return { data: [], totalCount: 0 };
+        }
+
+        let itemList = [];
+        const items = responseBody.items.item;
+        if (items) {
+            itemList = Array.isArray(items) ? items : [items];
+        }
+
+        // --- 데이터 가공 로직 시작 ---
+        const processed = itemList.map((item) => {
+            const x = parseFloat(item.CRD_INFO_X);
+            const y = parseFloat(item.CRD_INFO_Y);
+
+            // 1. 좌표가 없거나 이상한 데이터 필터링
+            if (!x || !y || isNaN(x) || isNaN(y)) return null;
+
+            try {
+                // 2. TM -> 위경도 변환 (proj4 사용)
+                const [lng, lat] = proj4(EPSG5174, WGS84, [x, y]);
+
+                // 3. 필요한 형식으로 매핑
+                return {
+                    title: item.BPLC_NM,
+                    category: item.BZSTAT_SE_NM,
+                    address: item.ROAD_NM_ADDR,
+                    lat: lat,
+                    lng: lng,
+                    status: item.SALS_STTS_CD || '', // 영업상태
+                    status_name:item.SALS_STTS_NM || '',
+                    manageNo: item.MNG_NO,
+                    updatedAt: item.DAT_UPDT_PNT
+                };
+            } catch (error) {
+                return null;
+            }
+        }).filter(item => item !== null); // null값 제거
+        // --- 데이터 가공 로직 끝 ---
+
+        // ★ 'processed' 변수를 여기서 반환합니다.
+        return { data: processed, totalCount: totalCount };
+
+    } catch (err) {
+        console.error(`❌ API Error (${apiPath}):`, err.message);
+        return { data: [], totalCount: 0 };
+    }
+}
+
+
+// 2. syncGovernmentData: totalCount 기반으로 루프 제어
+async function syncGovernmentData(startDate, endDate) {
+    let syncCount = 0;
+    // Object.keys를 써야 OP_L_... 같은 API 코드가 들어옵/니다.
+    const apiCodes = Object.keys(TARGET_APIS); 
+
+    for (const apiPath of apiCodes) {
+        let pageNo = 1;
+        let totalCount = 0;
+        const numOfRows = 100;
+
+        console.log(`📡 [${TARGET_APIS[apiPath]}] 동기화 시작...`);
+
+        while (true) {
+            // fetchApiData가 이제 객체를 반환함 { data, totalCount }
+            const result = await fetchApiData(TARGET_APIS[apiPath], startDate, endDate, pageNo);
+            totalCount = result.totalCount;
+            // 데이터가 있으면 저장
+            if (result.data.length > 0) {
+                for (const item of result.data) {
+                    await pool.query(`
+                        INSERT INTO gov_permit_info 
+                        (manage_num, biz_name, addr_road, status_code, status_name, lat, lng)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ON DUPLICATE KEY UPDATE 
+                            status_code = VALUES(status_code),
+                            status_name = VALUES(status_name),
+                            biz_name = VALUES(biz_name),
+                            addr_road = VALUES(addr_road),
+                            lat = VALUES(lat),
+                            lng = VALUES(lng)
+                    `, [
+                            item.manageNo,   // fetchApiData에서 정의한 키값 사용
+                            item.title,      // item.biz_name (X) -> item.title (O)
+                            item.address,    // item.addr_road (X) -> item.address (O)
+                            item.status,
+                            item.status_name,     // item.status_name (X) -> item.status (O)
+                            item.lat,
+                            item.lng
+                        ]);
+                    syncCount++;
+                }
+            }
+
+            console.log(`📑 [${apiPath}] ${pageNo}페이지 처리 완료 (현재까지 ${syncCount}건 저장)`);
+            // ★ 핵심: 현재 페이지까지 불러온 개수가 전체 개수(totalCount)보다 적으면 다음 페이지로
+            if (pageNo * numOfRows < totalCount) {
+                pageNo++;
+            } else {
+                // 더 이상 가져올 데이터가 없으면 루프 종료
+                break; 
+            }
+        }
+    }
+    
+    await pool.query("INSERT INTO api_sync_log (sync_date, total_count, status) VALUES (?, ?, ?)", [startDate, syncCount, 'SUCCESS']);
+    console.log(`✅ [${startDate}] 총 ${syncCount}건 동기화 완료`);
+}
+
+
+
 

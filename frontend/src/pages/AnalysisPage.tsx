@@ -307,7 +307,7 @@ const AnalysisPage = () => {
               // 단일 상가
               const shop = shops[0];
               content = `<div style="padding:15px; min-width:150px;">
-                {shop.store_name}<br/>
+                <strong style="font-size:11px;">${shop.store_name}</strong><br/>
                 <span style="font-size:12px; color:#666;">${shop.category_small_name}</span>
               </div>`;
             } else {
@@ -688,6 +688,9 @@ const AnalysisPage = () => {
       setSelectedSmall(hierarchy.small); // 최종 소분류 선택
 
       console.log(`✅ ${hierarchy.small} 자동 세팅 완료`);
+      /*console.log('데이터 불러오기');
+      const res = await fetch(`${API_BASE_URL}/test-sync`);
+      console.log(res);*/
     } catch (err) {
       console.error("분류 자동 선택 중 오류:", err);
     }
