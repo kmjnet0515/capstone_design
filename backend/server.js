@@ -1672,10 +1672,23 @@ async function syncGovernmentData(startDate, endDate) {
         }
     }
     
-    await pool.query("INSERT INTO api_sync_log (sync_date, total_count, status) VALUES (?, ?, ?)", [startDate, syncCount, 'SUCCESS']);
+    await pool.query("INSERT INTO api_sync_log (sync_date, total_count, status) VALUES (?, ?, ?)", [endDate, syncCount, 'SUCCESS']);
     console.log(`✅ [${startDate}] 총 ${syncCount}건 동기화 완료`);
 }
 
+app.get('/api/asy', async (req, res) => {
+    console.log("🚀 [배치 작업] 일일 데이터 동기화 시작...");
 
+    const d = new Date();
+    
+    // END_DATE: 오늘 기준 2일 전 (예: 오늘 29일 -> 27일)
+    d.setDate(d.getDate() - 2);
+    const endDate = d.toISOString().split('T')[0].replace(/-/g, '');
 
+    // START_DATE: 오늘 기준 3일 전 (예: 오늘 29일 -> 26일)
+    // 이렇게 하면 26일 00시 ~ 27일 00시 사이의 하루치 '변동분'만 가져옵니다.
+    d.setDate(d.getDate() - 10);
+    const startDate = d.toISOString().split('T')[0].replace(/-/g, '');
 
+    await syncGovernmentData(startDate, endDate);
+});

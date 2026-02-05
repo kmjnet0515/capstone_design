@@ -4,6 +4,7 @@ import AnalysisSidebar from "../components/analysis/AnalysisSidebar"
 import MapControls from '../components/analysis/MapControls';
 import AnalysisDashboard from '../components/analysis/AnalysisDashboard';
 import type {SupportProgram}  from '../components/analysis/SupportPrograms';
+import { useAnalysisStore } from '../store/useAnalysisStore';
 
 const API_BASE_URL = "http://localhost:3000/api";
 const calculateBBox = (lat: number, lng: number, r: number) => {
@@ -56,6 +57,8 @@ const AnalysisPage = () => {
   const [supportPrograms, setSupportPrograms] = useState<SupportProgram[]>([]);
   const [isSupportLoading, setIsSupportLoading] = useState(false);
   const [isLoadingClosed, setIsLoadingClosed] = useState(false); // 로딩 상태 추가
+
+  const setAnalysisResult = useAnalysisStore((state) => state.setAnalysisResult);
   useEffect(() => {
     fetch(`${API_BASE_URL}/categories/large`)
       .then(res => res.json())
@@ -237,120 +240,149 @@ const AnalysisPage = () => {
     });
   };
 
+  // handleStartAnalysis 함수 전체
   const handleStartAnalysis = async () => {
-    if (!selectedSmall || radius === 0) return;
+    // 필수 데이터 체크
+    if (!selectedSmall || radius === 0) {
+      alert("업종과 분석 반경을 설정해주세요.");
+      return;
+    }
+
     setIsLoading(true);
-    clearAllData();
+    clearAllData(); // 기존 마커/데이터 삭제 로직 호출
     if (infoWindowRef.current) infoWindowRef.current.close();
     activeMarkerRef.current = null;
 
     // 브이월드 에러 방지용 750m 제한
     const analysisRadius = Math.min(radius, 750);
     const bbox = calculateBBox(coords.lat, coords.lng, radius);
-    
-    // calculateBBox는 "minLat,minLng,maxLat,maxLng" 순서로 반환함
     const [minLat, minLng, maxLat, maxLng] = bbox.split(',').map(Number);
 
     try {
+      // 1. API 동시 호출
       const [distRes, landRes, shopRes, closedRes] = await Promise.all([
         fetch(`${API_BASE_URL}/market/major-districts?lat=${coords.lat}&lng=${coords.lng}&radius=${radius}`),
         fetch(`${API_BASE_URL}/real-estate/land-price?bbox=${bbox}`),
         fetch(`${API_BASE_URL}/market/search?lat=${coords.lat}&lng=${coords.lng}&radius=${radius}&smallCat=${encodeURIComponent(selectedSmall)}`),
-        // ★ maxLat 부분을 정확하게 수정했습니다.
         fetch(`${API_BASE_URL}/analysis/closed-blocks?minLat=${minLat}&maxLat=${maxLat}&minLng=${minLng}&maxLng=${maxLng}&radius=${analysisRadius}`)
       ]);
 
-      // 1. 주요 상권
+      // 2. 주요 상권 데이터 처리
       const distData = await distRes.json();
       displayMajorDistricts(distData);
 
-      // 2. 실거래가
+      // 3. 실거래가 & 공시지가 처리
       await fetchRealEstateData(coords.lat, coords.lng, radius);
-
-      // 3. 공시지가
       const landData = await landRes.json();
       landDataRef.current = landData;
       displayLandPriceMarkers(landData);
 
-      // 4. 상가 마커
+      // 4. 상가 마커 및 그룹화 로직
       const shopData = await shopRes.json();
-      if (shopData.length > 0) {
-        // (1) 같은 좌표를 가진 상가끼리 묶기
+      if (shopData && shopData.length > 0) {
         const storeGroups = new Map<string, any[]>();
-
         shopData.forEach((shop: any) => {
-          // lat, lon을 키로 사용하여 그룹화
           const key = `${shop.lat},${shop.lon}`;
-          if (!storeGroups.has(key)) {
-            storeGroups.set(key, []);
-          }
+          if (!storeGroups.has(key)) storeGroups.set(key, []);
           storeGroups.get(key)?.push(shop);
         });
 
-        // (2) 그룹별로 마커 하나씩만 생성
-        markersRef.current = []; // 초기화
-
+        markersRef.current = [];
         storeGroups.forEach((shops, key) => {
           const [lat, lon] = key.split(',').map(Number);
-
           const marker = new kakao.maps.Marker({
             position: new kakao.maps.LatLng(lat, lon),
             map: showShops ? mapInstance.current : null,
             zIndex: 1
           });
 
-          // (3) 클릭 이벤트: 상가가 1개면 기존대로, 여러 개면 리스트 출력
           kakao.maps.event.addListener(marker, 'click', () => {
             let content = '';
-
             if (shops.length === 1) {
-              // 단일 상가
               const shop = shops[0];
               content = `<div style="padding:15px; min-width:150px;">
                 <strong style="font-size:11px;">${shop.store_name}</strong><br/>
                 <span style="font-size:12px; color:#666;">${shop.category_small_name}</span>
               </div>`;
             } else {
-              // 중복 상가 (리스트 뷰)
               const listHtml = shops.map((s, index) => 
-                `<li style="padding: 6px 0; border-bottom: ${index === shops.length - 1 ? 'none' : '1px solid #eee'}; display: flex; justify-content: space-between; align-items: center;">
-                  <div>
-                    <div style="font-weight:bold; font-size:13px; color:#333;">${s.store_name}</div>
-                    <div style="font-size:11px; color:#888;">${s.category_small_name}</div>
-                  </div>
+                `<li style="padding: 6px 0; border-bottom: ${index === shops.length - 1 ? 'none' : '1px solid #eee'};">
+                  <div style="font-weight:bold; font-size:13px; color:#333;">${s.store_name}</div>
+                  <div style="font-size:11px; color:#888;">${s.category_small_name}</div>
                 </li>`
               ).join('');
-
-              content = `
-                <div style="padding:15px; min-width:220px; max-width:280px; font-family:sans-serif;">
-                  <div style="margin-bottom:8px; font-weight:bold; border-bottom:2px solid #3b82f6; padding-bottom:6px; color:#1e3a8a; display:flex; justify-content:space-between;">
-                    <span>🏢 이 건물의 상가</span>
-                    <span style="background:#3b82f6; color:white; padding:0 6px; border-radius:10px; font-size:11px; display:flex; align-items:center;">${shops.length}</span>
-                  </div>
-                  <ul style="list-style:none; padding:0; margin:0; max-height:200px; overflow-y:auto; overflow-x:hidden;">
-                    ${listHtml}
-                  </ul>
-                </div>`;
+              content = `<div style="padding:15px; min-width:220px; max-height:250px; overflow-y:auto;">
+                <div style="margin-bottom:8px; font-weight:bold; border-bottom:2px solid #3b82f6; padding-bottom:6px;">🏢 이 건물의 상가 (${shops.length})</div>
+                <ul style="list-style:none; padding:0; margin:0;">${listHtml}</ul>
+              </div>`;
             }
-
             handleMarkerInteraction(marker, content);
           });
-
           markersRef.current.push(marker);
         });
       }
 
-      // 5. 폐업/활력도 (지적도)
+      // 5. 폐업/활력도 (블록 데이터) 가공
       const closedData = await closedRes.json();
-      if (Array.isArray(closedData)) {
-        drawClosedBlocks(closedData);
+      // closedData가 { allFeatures, statusCountMap } 구조이거나 배열인 경우에 대응
+      const features = Array.isArray(closedData) ? closedData : (closedData.allFeatures || []);
+      
+      if (features.length > 0) {
+        drawClosedBlocks(features);
       }
 
+      // 추천 페이지에서 사용할 블록 데이터 생성
+      const processedBlocks = features.map((feature: any) => {
+          const paths = feature.geometry.type === 'Polygon' 
+              ? feature.geometry.coordinates[0] 
+              : feature.geometry.coordinates[0][0];
+          
+          let latSum = 0, lngSum = 0;
+          paths.forEach((p: any) => { 
+            lngSum += p[0]; // GeoJSON은 [lng, lat] 순서
+            latSum += p[1]; 
+          });
+          
+          const center = { lat: latSum / paths.length, lng: lngSum / paths.length };
+
+          return {
+              id: feature.properties.pnu || feature.id,
+              jibun: feature.properties.jibun,
+              geometry: feature.geometry,
+              center: center,
+              properties: {
+                activeCount: feature.properties.activeCount || 0,
+                closedCount: feature.properties.closedCount || 0,
+                vitality: feature.properties.vitality || 0
+              }
+          };
+      });
+
+      // ★ 6. Zustand 스토어에 데이터 업데이트
+      // setAnalysisResult는 컴포넌트 상단에서 const { setAnalysisResult } = useAnalysisStore(); 로 가져와야 합니다.
+      setAnalysisResult({
+          coords: { lat: coords.lat, lng: coords.lng },
+          radius: radius,
+          address: address, // 현재 AnalysisPage의 주소 state
+          selectedCategory: {
+              large: selectedLarge, // 현재 AnalysisPage의 대분류 state
+              mid: selectedMid,     // 현재 AnalysisPage의 중분류 state
+              small: selectedSmall   // 현재 AnalysisPage의 소분류 state
+          },
+          landPrices: landData,
+          majorDistricts: distData,
+          blocks: processedBlocks 
+      });
+      
+      console.log("✅ 데이터가 Store에 저장되었습니다.");
+      
+      // 후속 작업
       fetchSupportPrograms();
       setShowDashboard(true);
 
     } catch (err) {
       console.error("분석 중 오류 발생:", err);
+      alert("데이터 분석 중 오류가 발생했습니다. 다시 시도해 주세요.");
     } finally {
       setIsLoading(false);
     }
@@ -688,14 +720,14 @@ const AnalysisPage = () => {
       setSelectedSmall(hierarchy.small); // 최종 소분류 선택
 
       console.log(`✅ ${hierarchy.small} 자동 세팅 완료`);
-      /*console.log('데이터 불러오기');
-      const res = await fetch(`${API_BASE_URL}/test-sync`);
-      console.log(res);*/
+      console.log('데이터 불러오기');
+      const res = await fetch(`${API_BASE_URL}/asy`);
+      console.log(res);
     } catch (err) {
       console.error("분류 자동 선택 중 오류:", err);
     }
   };
-
+  
 
 
   // 프론트엔드 함수
