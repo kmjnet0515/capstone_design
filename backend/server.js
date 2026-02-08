@@ -59,6 +59,43 @@ cron.schedule('5 0 * * *', async () => {
 
     await syncGovernmentData(startDate, endDate);
 });
+
+
+let cachedSgisToken = null;
+let tokenExpiryTime = 0;
+
+const getSgisToken = async () => {
+    const now = Date.now();
+
+    // 1. 토큰이 있고 만료되지 않았다면 (여유 있게 만료 5분 전까지 확인) 재사용
+    if (cachedSgisToken && now < tokenExpiryTime - (5 * 60 * 1000)) {
+        console.log("SGIS 토큰 재사용");
+        return cachedSgisToken;
+    }
+
+    // 2. 토큰이 없거나 만료되었다면 새로 발급
+    try {
+        console.log("🔑 SGIS 토큰 새로 발급 중...");
+        const response = await axios.get(`https://sgisapi.mods.go.kr/OpenAPI3/auth/authentication.json`, {
+            params: {
+                consumer_key: process.env.SGIS_CUSTOMER_KEY,
+                consumer_secret: process.env.SGIS_SECRET_KEY
+            }
+        });
+
+        const { accessToken, timeout } = response.data.result;
+        
+        cachedSgisToken = accessToken;
+        // timeout은 보통 초 단위(7200)로 오므로 현재 시간에 더해줌
+        tokenExpiryTime = now + (parseInt(timeout) * 1000); 
+
+        return cachedSgisToken;
+    } catch (err) {
+        console.error("SGIS Token 발급 에러:", err);
+        return null;
+    }
+};
+
 const TARGET_APIS = {
     "즉석판매제조가공업" : "instant_food_processors",
     "휴게음식점" : "rest_cafes",
@@ -657,7 +694,7 @@ app.get('/api/real-estate/trade', async (req, res) => {
         );
 
         const responses = await Promise.all(requests);
-
+        //console.log(responses);
         responses.forEach(response => {
             const items = response.data?.response?.body?.items?.item;
             if (items) {
@@ -739,21 +776,18 @@ app.get('/api/real-estate/land-price', async (req, res) => {
             const result = await parser.parseStringPromise(response.data);
             const collection = result.FeatureCollection || result['wfs:FeatureCollection'];
             if (!collection || !collection.featureMember) {
-                console.log("🧐 데이터 없음 혹은 구조 변경 발견!");
-                console.log("Full XML Body snippet:", response.data.toString().substring(0, 500)); // 응답 앞부분 확인
+                console.log("데이터 없음");
                 hasMore = false;
                 break;
             }
             const features = collection?.featureMember;
 
             if (!features) {
-                console.log("no");
                 hasMore = false;
                 break;
             }
 
             const featureList = Array.isArray(features) ? features : [features];
-            console.log(featureList.length);
 
             // 데이터 가공 로직 (기존과 동일)
             const processedPage = featureList.map(f => {
@@ -786,7 +820,6 @@ app.get('/api/real-estate/land-price', async (req, res) => {
             allProcessedData.push(...processedPage);
 
             // 가져온 데이터가 PAGE_SIZE(1000개)보다 적으면 더 이상 데이터가 없는 것임
-            console.log(featureList.length);
             if (featureList.length < PAGE_SIZE) {
                 hasMore = false;
             } else {
@@ -867,7 +900,7 @@ function getDistance(lat1, lng1, lat2, lng2) {
     return R * c;
 }
 
-function getOpenApiRegionCode(address) {
+/*function getOpenApiRegionCode(address) {
     if (!address) return null;
 
     const parts = address.split(' ');
@@ -885,7 +918,7 @@ function getOpenApiRegionCode(address) {
     // CSV에서 찾기
     const row = localDataList.find(item => item.자치단체명 === searchKey);
     return row ? row['자치단체 코드'] : null;
-}
+}*/
 
 // openai 리포트 생성 API (고도화 버전)
 app.post('/api/analysis/report', async (req, res) => {
@@ -975,7 +1008,7 @@ const getValueDeep = (obj, key) => {
     }
     return null;
 };
-// [API] 폐업 데이터 조회 엔드포인트
+/*// [API] 폐업 데이터 조회 엔드포인트
 // 배열을 특정 크기(chunkSize)로 나누는 헬퍼 함수
 const chunkArray = (array, size) => {
     return Array.from({ length: Math.ceil(array.length / size) }, (v, i) =>
@@ -1109,7 +1142,7 @@ app.get('/api/analysis/closure-data', async (req, res) => {
         res.status(500).json({ error: "서버 내부 오류" });
     }
 });
-
+*/
 
 async function initializeCategoryData() {
     try {
@@ -1272,7 +1305,7 @@ app.get('/api/analysis/closed-blocks', async (req, res) => {
     const centerLat = (parseFloat(minLat) + parseFloat(maxLat)) / 2;
     const centerLng = (parseFloat(minLng) + parseFloat(maxLng)) / 2;
     const limitRadius = parseFloat(radius) || 500;
-    console.log(limitRadius);
+    //console.log(limitRadius);
     try {
         // 1. DB에서 해당 범위 내 모든 데이터 조회 (영업 + 폐업)
         const [dbRows] = await pool.query(`
@@ -1375,7 +1408,7 @@ app.get('/api/analysis/closed-blocks', async (req, res) => {
 
         // 최종 결과: 중복이 제거된 순수 가게 리스트
         const allPoints = Array.from(uniqueStoreMap.values());
-        console.log(allPoints);
+        //console.log(allPoints);
         // 4. 지적도 데이터 가져오기 (기존 루프 로직 유지)
         let allFeatures = [];
         let page = 1;
@@ -1393,7 +1426,6 @@ app.get('/api/analysis/closed-blocks', async (req, res) => {
                 });
                 const responseData = vworldRes.data.response;
                 if (responseData?.status === 'OK') {
-                    console.log("good");
                     allFeatures.push(...responseData.result.featureCollection.features);
                     if (responseData.result.featureCollection.features.length === 1000) page++;
                     else hasMore = false;
@@ -1691,4 +1723,97 @@ app.get('/api/asy', async (req, res) => {
     const startDate = d.toISOString().split('T')[0].replace(/-/g, '');
 
     await syncGovernmentData(startDate, endDate);
+});
+
+
+//인구 조사
+app.get('/api/analysis/population', async (req, res) => {
+    const { address } = req.query; // 클라이언트에서 보낸 주소 (예: "부산 강서구 명지동 3506-4")
+    console.log("인구 조사");
+    console.log(address);
+    if (!address) return res.status(400).json({ error: "주소가 필요합니다." });
+
+    try {
+        const token = await getSgisToken();
+        if (!token) throw new Error("토큰 발급 실패");
+
+        // [STEP 1] 지오코딩을 통해 adm_cd(행정동 코드) 가져오기
+        
+        const geoRes = await axios.get(`https://sgisapi.mods.go.kr/OpenAPI3/addr/geocode.json`, {
+            params: {
+                accessToken: token,
+                address: address
+            }
+        });
+        console.log("sgis geores : ");
+        //console.log(geoRes);
+        console.log(geoRes.status);
+        const geoResult = geoRes.data.result?.resultdata[0];
+        if (!geoResult) return res.status(404).json({ error: "해당 주소의 행정 코드를 찾을 수 없습니다." });
+
+        const adm_cd = geoResult.adm_cd; // 예: 2112059 (명지1동)
+        const adm_nm = geoResult.adm_nm; // 실제 매칭된 행정동 명칭
+
+        // [STEP 2] 인구 데이터 조회 (성별/연령대)
+        // searchpopulation은 조건에 맞는 인구 '수'를 반환합니다. 
+        // 전체 성별/연령대를 한 번에 가져오기 위해 '인구 통계 API'를 사용하거나 
+        // 루프를 돌려 필요한 연령대별로 호출할 수 있습니다.
+        
+        const requestConfigs = [
+            { type: 'age_eq_10', gender: '0', age: '31' },
+            { type: 'age_eq_20', gender: '0', age: '32' },
+            { type: 'age_eq_30', gender: '0', age: '33' },
+            { type: 'age_eq_40', gender: '0', age: '34' },
+            { type: 'age_eq_50', gender: '0', age: '35' },
+            { type: 'age_eq_60', gender: '0', age: '36' },
+            { type: 'age_gte_70', gender: '0', age: '40' },
+            { type: 'male',   gender: '1'},
+            { type: 'female', gender: '2'}
+        ];
+
+        const populationResults = {};
+
+        // [STEP 3] 3개씩 묶어서 3번 실행 (배치 처리)
+        for (let i = 0; i < requestConfigs.length; i += 3) {
+            const batch = requestConfigs.slice(i, i + 3);
+            
+            const batchPromises = batch.map(config => {
+                // 파라미터 조립 (age가 있을 때만 포함)
+                const params = {
+                    accessToken: token,
+                    year: '2023',
+                    adm_cd: adm_cd,
+                    gender: config.gender,
+                    low_search: '0'
+                };
+                if (config.age) params.age_type = config.age;
+
+                return axios.get(`https://sgisapi.mods.go.kr/OpenAPI3/stats/searchpopulation.json`, { params })
+                    .then(r => ({
+                        id: config.type,
+                        count: parseInt(r.data.result?.[0]?.population || 0)
+                    }));
+            });
+
+            const batchResults = await Promise.all(batchPromises);
+            batchResults.forEach(res => {
+                populationResults[res.id] = res.count;
+            });
+
+            console.log(`📦 배치 (${i/3 + 1}/3) 완료:`, batch.map(b => b.id).join(', '));
+
+        }
+        console.log(populationResults);
+        res.json({
+            address,
+            adm_nm,
+            adm_cd,
+            data: populationResults,
+            total_sum: (populationResults.male || 0) + (populationResults.female || 0)
+        });
+
+    } catch (err) {
+        console.error("인구 분석 오류:", err);
+        res.status(500).json({ error: "데이터 조회 중 오류 발생" });
+    }
 });

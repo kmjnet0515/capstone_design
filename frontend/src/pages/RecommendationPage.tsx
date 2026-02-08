@@ -70,7 +70,7 @@ const RecommendationPage = () => {
   const generateReasons = (active: number, closed: number, vitality: number) => {
     const res = [];
     if (vitality > 0.3) res.push("폐업 대비 신규 개업이 활발한 성장형 상권입니다.");
-    if (closed === 0 && active > 0) res.push("최근 1년간 폐업 사례가 없어 업종 유지력이 매우 뛰어납니다.");
+    if (closed === 0 && active > 0) res.push("최근 5년간 폐업 사례가 없어 업종 유지력이 매우 뛰어납니다.");
     if (active > 10) res.push("동일 업종 밀집도가 높아 집객 효과가 우수한 입지입니다.");
     if (res.length === 0) res.push("상권 변동성이 낮아 안정적인 운영이 가능한 구역입니다.");
     return res;

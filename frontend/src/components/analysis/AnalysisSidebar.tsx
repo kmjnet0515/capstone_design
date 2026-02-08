@@ -1,6 +1,5 @@
 import React, { useState } from 'react'; // useState 추가
-import {Loader2, MapPin, Search } from 'lucide-react';
-
+import { MapPin, Search, Loader2, Navigation } from 'lucide-react'; // Navigation 아이콘 추가
 interface AnalysisSidebarProps {
   address: string;
   radius: number;
@@ -16,11 +15,17 @@ interface AnalysisSidebarProps {
   onSelectSmall: (cat: string) => void;
   onStartAnalysis: () => void;
   onAutoSelect: (hierarchy: { large: string; mid: string; small: string }) => void; // 자동 선택 함수 추가
+  onLocationSelect: (lat: number, lng: number, address: string) => void; // 추가
 }
 
 const AnalysisSidebar: React.FC<AnalysisSidebarProps> = (p) => {
   const [searchQuery, setSearchQuery] = useState("");
   const [isSearching, setIsSearching] = useState(false);
+
+  // 주소 검색용 state
+  const [locQuery, setLocQuery] = useState("");
+  const [locResults, setLocResults] = useState<any[]>([]);
+  const [isLocSearching, setIsLocSearching] = useState(false);
 
   const handleSearch = async () => {
     if (!searchQuery.trim()) return;
@@ -42,9 +47,67 @@ const AnalysisSidebar: React.FC<AnalysisSidebarProps> = (p) => {
     }
   };
   
+  const searchLocation = () => {
+    if (!locQuery.trim()) return;
+    const { kakao } = window;
+    if (!kakao) return;
+
+    setIsLocSearching(true);
+    const ps = new kakao.maps.services.Places();
+    
+    ps.keywordSearch(locQuery, (data: any, status: any) => {
+      if (status === kakao.maps.services.Status.OK) {
+        setLocResults(data);
+      } else if (status === kakao.maps.services.Status.ZERO_RESULT) {
+        alert("검색 결과가 없습니다.");
+        setLocResults([]);
+      } else {
+        alert("검색 중 오류가 발생했습니다.");
+      }
+      setIsLocSearching(false);
+    });
+  };
   return (
   <aside className="w-95 bg-white border-r border-slate-100 p-8 flex flex-col shadow-xl z-10 overflow-y-auto shrink-0">
     <header className="mb-10"><h1 className="text-3xl font-black text-blue-950 italic">SBC 365</h1><p className="text-[11px] text-blue-600 font-bold uppercase mt-1.5">Market Analysis Tool</p></header>
+    <section className="mb-10">
+      <label className="text-[11px] font-black text-slate-400 mb-3 block uppercase tracking-widest">
+        지점 위치 검색
+      </label>
+      <div className="relative mb-2">
+        <input
+          type="text"
+          value={locQuery}
+          onChange={(e) => setLocQuery(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && searchLocation()}
+          placeholder="주소 입력"
+          className="w-full p-4 pr-12 border-2 placeholder:text-slate-300 border-slate-100 rounded-2xl text-sm font-bold focus:border-blue-600 outline-none transition-all"
+        />
+        <button onClick={searchLocation} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400">
+          {isLocSearching ? <Loader2 className="animate-spin" size={20} /> : <Search size={20} />}
+        </button>
+      </div>
+
+      {/* 검색 결과 리스트 */}
+      {locResults.length > 0 && (
+        <div className="max-h-60 overflow-y-auto border-2 border-slate-50 rounded-2xl bg-slate-50 shadow-inner">
+          {locResults.map((item, idx) => (
+            <div 
+              key={idx}
+              onClick={() => {
+                p.onLocationSelect(parseFloat(item.y), parseFloat(item.x), item.address_name);
+                setLocResults([]); // 리스트 닫기
+                setLocQuery(item.place_name); // 입력창 업데이트
+              }}
+              className="p-3 hover:bg-white cursor-pointer border-b border-slate-100 last:border-none transition-colors"
+            >
+              <div className="text-[13px] font-bold text-slate-800">{item.place_name}</div>
+              <div className="text-[11px] text-slate-500">{item.address_name}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
     <section className="mb-10">
         <label className="text-[11px] font-black text-slate-400 mb-3 block uppercase tracking-widest">
           AI 업종 빠른 검색

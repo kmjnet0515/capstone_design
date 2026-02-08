@@ -240,14 +240,14 @@ const AnalysisPage = () => {
     });
   };
 
-  // handleStartAnalysis 함수 전체
+  // 시작
   const handleStartAnalysis = async () => {
     // 필수 데이터 체크
     if (!selectedSmall || radius === 0) {
       alert("업종과 분석 반경을 설정해주세요.");
       return;
     }
-
+    console.log(`주소 : ${address}`);
     setIsLoading(true);
     clearAllData(); // 기존 마커/데이터 삭제 로직 호출
     if (infoWindowRef.current) infoWindowRef.current.close();
@@ -260,11 +260,13 @@ const AnalysisPage = () => {
 
     try {
       // 1. API 동시 호출
-      const [distRes, landRes, shopRes, closedRes] = await Promise.all([
+      const [distRes, landRes, shopRes, closedRes, popRes] = await Promise.all([
         fetch(`${API_BASE_URL}/market/major-districts?lat=${coords.lat}&lng=${coords.lng}&radius=${radius}`),
         fetch(`${API_BASE_URL}/real-estate/land-price?bbox=${bbox}`),
         fetch(`${API_BASE_URL}/market/search?lat=${coords.lat}&lng=${coords.lng}&radius=${radius}&smallCat=${encodeURIComponent(selectedSmall)}`),
-        fetch(`${API_BASE_URL}/analysis/closed-blocks?minLat=${minLat}&maxLat=${maxLat}&minLng=${minLng}&maxLng=${maxLng}&radius=${analysisRadius}`)
+        fetch(`${API_BASE_URL}/analysis/closed-blocks?minLat=${minLat}&maxLat=${maxLat}&minLng=${minLng}&maxLng=${maxLng}&radius=${analysisRadius}`),
+        fetch(`${API_BASE_URL}/analysis/population?address=${address}`)
+
       ]);
 
       // 2. 주요 상권 데이터 처리
@@ -357,7 +359,9 @@ const AnalysisPage = () => {
               }
           };
       });
-
+      const popData = await popRes.json();
+      console.log("pop res : ");
+      console.log(popData);
       // ★ 6. Zustand 스토어에 데이터 업데이트
       // setAnalysisResult는 컴포넌트 상단에서 const { setAnalysisResult } = useAnalysisStore(); 로 가져와야 합니다.
       setAnalysisResult({
@@ -611,7 +615,7 @@ const AnalysisPage = () => {
   };
 
   // 폐업 데이터 가져오기 및 마커 표시
-  const fetchClosureData = async () => {
+  /*const fetchClosureData = async () => {
     const { kakao } = window;
     try {
       const res = await fetch(
@@ -671,7 +675,7 @@ const AnalysisPage = () => {
     } catch (err) {
       console.error("폐업 데이터 로드 실패:", err);
     }
-  };
+  };*/
 
   const updateAddress = (lat: number, lng: number) => {
     const { kakao } = window;
@@ -679,6 +683,9 @@ const AnalysisPage = () => {
     
     geocoder.coord2Address(lng, lat, (result: any, status: any) => {
       if (status === kakao.maps.services.Status.OK) {
+        console.log(`updateAddress 내부 address 결과 : `);
+        console.log(result[0].road_address);
+        console.log(result[0].address);
         setAddress(result[0].road_address?.address_name || result[0].address.address_name);
         setCoords({ lat, lng });
       }
@@ -814,6 +821,51 @@ const AnalysisPage = () => {
     });
   };
 
+  const handleLocationSelect = (lat: number, lng: number, addressName: string) => {
+    const { kakao } = window;
+    if (!mapInstance.current) return;
+
+    const moveLatLng = new kakao.maps.LatLng(lat, lng);
+
+    // 1. 지도 이동
+    mapInstance.current.panTo(moveLatLng);
+    
+    // 2. 상태 업데이트
+    setCoords({ lat, lng });
+    setAddress(addressName);
+    setRadius(0); // 반경 초기화 (원한다면 유지 가능)
+
+    // 3. 기존 데이터 및 마커 제거
+    clearAllData();
+    if (currentCircle.current) currentCircle.current.setMap(null);
+    if (infoWindowRef.current) infoWindowRef.current.close();
+
+    // 4. 빨간색 마커 표시 (현재 선택 위치 강조)
+    if (currentMarker.current) currentMarker.current.setMap(null);
+    currentMarker.current = new kakao.maps.Marker({
+      position: moveLatLng,
+      map: mapInstance.current,
+      image: new kakao.maps.MarkerImage(
+        'https://t1.daumcdn.net/localimg/localimages/07/mapapidoc/marker_red.png', 
+        new kakao.maps.Size(32, 34)
+      )
+    });
+    
+    // 5. (선택사항) 중심점에 원 미리 생성
+    currentCircle.current = new kakao.maps.Circle({
+      center: moveLatLng,
+      radius: 0,
+      strokeWeight: 2,
+      strokeColor: '#2563eb',
+      strokeOpacity: 0.8,
+      fillColor: '#3b82f6',
+      fillOpacity: 0.2,
+      map: mapInstance.current
+    });
+
+    // 행정동 코드 등 업데이트 (기존 updateAddress 로직 활용 권장)
+    updateAddress(lat, lng); 
+  };
   // ... (기타 토글 함수들)
   const toggleLandPrice = () => {
     const n = !showLandPrice; setShowLandPrice(n);
@@ -915,6 +967,7 @@ const AnalysisPage = () => {
         onSelectSmall={setSelectedSmall}
         onStartAnalysis={handleStartAnalysis}
         onAutoSelect={handleAutoSelect}
+        onLocationSelect={handleLocationSelect}
       />
       
 
