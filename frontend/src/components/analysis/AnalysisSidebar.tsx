@@ -53,18 +53,44 @@ const AnalysisSidebar: React.FC<AnalysisSidebarProps> = (p) => {
     if (!kakao) return;
 
     setIsLocSearching(true);
-    const ps = new kakao.maps.services.Places();
     
-    ps.keywordSearch(locQuery, (data: any, status: any) => {
-      if (status === kakao.maps.services.Status.OK) {
-        setLocResults(data);
-      } else if (status === kakao.maps.services.Status.ZERO_RESULT) {
-        alert("검색 결과가 없습니다.");
-        setLocResults([]);
-      } else {
-        alert("검색 중 오류가 발생했습니다.");
+    const geocoder = new kakao.maps.services.Geocoder();
+    const ps = new kakao.maps.services.Places();
+
+    // 1. 먼저 주소(행정구역) 검색을 시도합니다.
+    geocoder.addressSearch(locQuery, (addrData: any, addrStatus: any) => {
+      let results: any[] = [];
+
+      // 주소 검색 결과가 있는 경우 (행정구역 우선)
+      if (addrStatus === kakao.maps.services.Status.OK) {
+        results = addrData.map((item: any) => ({
+          display_name: item.address_name,
+          category: item.address_type === 'REGION' ? '지역명' : '주소',
+          y: item.y,
+          x: item.x,
+          address: item.address_name
+        }));
       }
-      setIsLocSearching(false);
+
+      // 2. 장소 검색으로 보완합니다. (주소 결과가 적을 때를 대비)
+      ps.keywordSearch(locQuery, (placeData: any, placeStatus: any) => {
+        if (placeStatus === kakao.maps.services.Status.OK) {
+          const placeResults = placeData.map((item: any) => ({
+            display_name: item.place_name,
+            category: item.category_name.split(' > ').reverse()[0], // 마지막 카테고리 추출
+            y: item.y,
+            x: item.x,
+            address: item.address_name
+          }));
+          
+          // 주소 결과와 장소 결과를 합치되, 중복은 제거 (선택 사항)
+          const combined = [...results, ...placeResults];
+          setLocResults(combined.slice(0, 8)); // 상위 8개만 표시
+        } else {
+          setLocResults(results);
+        }
+        setIsLocSearching(false);
+      });
     });
   };
   return (
@@ -90,19 +116,29 @@ const AnalysisSidebar: React.FC<AnalysisSidebarProps> = (p) => {
 
       {/* 검색 결과 리스트 */}
       {locResults.length > 0 && (
-        <div className="max-h-60 overflow-y-auto border-2 border-slate-50 rounded-2xl bg-slate-50 shadow-inner">
+        <div className="mt-2 max-h-72 overflow-y-auto border-2 border-slate-100 rounded-2xl bg-white shadow-xl">
           {locResults.map((item, idx) => (
             <div 
               key={idx}
               onClick={() => {
-                p.onLocationSelect(parseFloat(item.y), parseFloat(item.x), item.address_name);
-                setLocResults([]); // 리스트 닫기
-                setLocQuery(item.place_name); // 입력창 업데이트
+                // 부모 컴포넌트(AnalysisPage)의 좌표 및 주소 업데이트 함수 호출
+                p.onLocationSelect(parseFloat(item.y), parseFloat(item.x), item.address);
+                setLocResults([]);
+                setLocQuery(item.display_name);
               }}
-              className="p-3 hover:bg-white cursor-pointer border-b border-slate-100 last:border-none transition-colors"
+              className="p-4 hover:bg-blue-50 cursor-pointer border-b border-slate-50 last:border-none group transition-colors"
             >
-              <div className="text-[13px] font-bold text-slate-800">{item.place_name}</div>
-              <div className="text-[11px] text-slate-500">{item.address_name}</div>
+              <div className="flex items-center justify-between">
+                <span className="text-[14px] font-bold text-slate-800 group-hover:text-blue-600">
+                  {item.display_name}
+                </span>
+                <span className="text-[10px] px-2 py-0.5 bg-slate-100 text-slate-400 rounded-md font-bold">
+                  {item.category}
+                </span>
+              </div>
+              <div className="text-[11px] text-slate-400 mt-1 truncate">
+                {item.address}
+              </div>
             </div>
           ))}
         </div>

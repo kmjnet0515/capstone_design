@@ -866,6 +866,7 @@ const AnalysisPage = () => {
     // 행정동 코드 등 업데이트 (기존 updateAddress 로직 활용 권장)
     updateAddress(lat, lng); 
   };
+  
   // ... (기타 토글 함수들)
   const toggleLandPrice = () => {
     const n = !showLandPrice; setShowLandPrice(n);
