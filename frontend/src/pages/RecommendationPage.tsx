@@ -15,6 +15,7 @@ const RecommendationPage = () => {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<any>(null);
   const selectedPolygonRef = useRef<any>(null); 
+  const comparePolygonsRef = useRef<Record<number, any>>({}); 
   
   const [candidates, setCandidates] = useState<any[]>([]);
   const [selectedBlock, setSelectedBlock] = useState<any>(null);
@@ -128,10 +129,10 @@ const RecommendationPage = () => {
   const handleBlockClick = (block: any) => {
     const { kakao } = window;
     if (!kakao || !mapInstance.current) return;
-    
+
     setSelectedBlock(block);
 
-    // 이전 폴리곤 지우기
+    // 이전 선택 폴리곤 지우기
     if (selectedPolygonRef.current) {
       selectedPolygonRef.current.setMap(null);
     }
@@ -140,11 +141,11 @@ const RecommendationPage = () => {
     const moveLatLon = new kakao.maps.LatLng(block.center.lat, block.center.lng);
     mapInstance.current.panTo(moveLatLon);
 
-    // 폴리곤 그리기
-    const rawPaths = block.geometry.type === 'Polygon' 
-      ? block.geometry.coordinates[0] 
+    // 선택 블록 파란 폴리곤 그리기
+    const rawPaths = block.geometry.type === 'Polygon'
+      ? block.geometry.coordinates[0]
       : block.geometry.coordinates[0][0];
-    
+
     const path = rawPaths.map((p: any) => new kakao.maps.LatLng(p[1], p[0]));
 
     const polygon = new kakao.maps.Polygon({
@@ -153,11 +154,29 @@ const RecommendationPage = () => {
       strokeColor: '#2563EB',
       strokeOpacity: 1,
       fillColor: '#3B82F6',
-      fillOpacity: 0.4
+      fillOpacity: 0.4,
+      zIndex: 10,
     });
 
     polygon.setMap(mapInstance.current);
     selectedPolygonRef.current = polygon;
+
+    // 선택된 블록이 비교 대상에 있으면 해당 연두 폴리곤 숨기고, 나머지는 다시 표시
+    const selectedIndex = candidates.findIndex(
+      (c) =>
+        c === block ||
+        (c.id != null && block.id != null && c.id === block.id) ||
+        (c.center &&
+          block.center &&
+          c.center.lat === block.center.lat &&
+          c.center.lng === block.center.lng)
+    );
+    compareIds.forEach((idx) => {
+      const comparePoly = comparePolygonsRef.current[idx];
+      if (comparePoly) {
+        comparePoly.setMap(idx === selectedIndex ? null : mapInstance.current);
+      }
+    });
   };
 
   // 추천 시나리오 버튼 핸들러
@@ -168,15 +187,54 @@ const RecommendationPage = () => {
   // 비교 선택 토글 (리스트 인덱스 기준)
   const toggleCompare = (index: number) => {
     if (index < 0) return;
+    const { kakao } = window as any;
+
     setCompareIds((prev) => {
       const exists = prev.includes(index);
+
+      // 지도 상의 비교 폴리곤 제거
       if (exists) {
+        const polygon = comparePolygonsRef.current[index];
+        if (polygon) {
+          polygon.setMap(null);
+          delete comparePolygonsRef.current[index];
+        }
         return prev.filter((id) => id !== index);
       }
+
+      // 최대 3개까지만 허용
       if (prev.length >= 3) {
-        // 최대 3개까지만 허용
         return prev;
       }
+
+      // 새 비교 대상에 대한 연두색 폴리곤 표시
+      if (kakao && mapInstance.current && candidates[index]) {
+        const block = candidates[index];
+        try {
+          const rawPaths =
+            block.geometry.type === 'Polygon'
+              ? block.geometry.coordinates[0]
+              : block.geometry.coordinates[0][0];
+
+          const path = rawPaths.map((p: any) => new kakao.maps.LatLng(p[1], p[0]));
+
+          const polygon = new kakao.maps.Polygon({
+            path,
+            strokeWeight: 3,
+            strokeColor: '#22c55e',
+            strokeOpacity: 1,
+            fillColor: '#bbf7d0',
+            fillOpacity: 0.4,
+            zIndex: 5,
+          });
+
+          polygon.setMap(mapInstance.current);
+          comparePolygonsRef.current[index] = polygon;
+        } catch (e) {
+          console.error('Failed to draw compare polygon:', e);
+        }
+      }
+
       return [...prev, index];
     });
   };
@@ -303,14 +361,50 @@ const RecommendationPage = () => {
 
   // 추천 시나리오 / 추천 개수 변경 시, 비교 선택 초기화
   useEffect(() => {
+    // 지도 위의 비교 폴리곤도 함께 제거
+    Object.values(comparePolygonsRef.current).forEach((polygon) => {
+      if (polygon && typeof polygon.setMap === 'function') {
+        polygon.setMap(null);
+      }
+    });
+    comparePolygonsRef.current = {};
     setCompareIds([]);
     setCompareReport('');
     setShowComparePanel(false);
   }, [scenario, recommendCount]);
 
+  // 선택 블록이 바뀌었을 때 비교 폴리곤 표시 동기화 (선택된 블록은 연두 숨김, 나머지 연두 표시)
+  useEffect(() => {
+    if (!mapInstance.current) return;
+    const selectedIndex =
+      selectedBlock == null
+        ? -1
+        : candidates.findIndex(
+            (c) =>
+              c === selectedBlock ||
+              (c.id != null && selectedBlock.id != null && c.id === selectedBlock.id) ||
+              (c.center &&
+                selectedBlock.center &&
+                c.center.lat === selectedBlock.center.lat &&
+                c.center.lng === selectedBlock.center.lng)
+          );
+    compareIds.forEach((idx) => {
+      const polygon = comparePolygonsRef.current[idx];
+      if (!polygon) return;
+      polygon.setMap(idx === selectedIndex ? null : mapInstance.current);
+    });
+  }, [selectedBlock, compareIds, candidates]);
+
   // 비교 대상 조합이 바뀔 때마다 이전 비교 리포트는 초기화
   useEffect(() => {
     if (compareIds.length === 0) {
+      // 비교 대상이 모두 해제되면 지도 상 폴리곤도 제거
+      Object.values(comparePolygonsRef.current).forEach((polygon) => {
+        if (polygon && typeof polygon.setMap === 'function') {
+          polygon.setMap(null);
+        }
+      });
+      comparePolygonsRef.current = {};
       setCompareReport('');
       setShowComparePanel(false);
       return;
@@ -410,19 +504,28 @@ const RecommendationPage = () => {
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-50/50">
-        {candidates.map((item, idx) => (
+        {candidates.map((item, idx) => {
+          const isSelected = selectedBlock?.id === item.id;
+          const isCompared = compareIds.includes(idx);
+          return (
             <div 
               key={item.id || idx}
               onClick={() => handleBlockClick(item)}
               className={`p-5 rounded-2xl cursor-pointer border transition-all duration-300 ${
-                selectedBlock?.id === item.id 
-                ? 'bg-blue-600 border-blue-600 text-white shadow-lg -translate-y-1' 
-                : 'bg-white border-slate-200 hover:border-blue-300 text-slate-700'
+                isSelected
+                  ? 'bg-blue-600 border-blue-600 text-white shadow-lg -translate-y-1'
+                  : isCompared
+                  ? 'bg-emerald-50 border-emerald-400 text-emerald-800'
+                  : 'bg-white border-slate-200 hover:border-blue-300 text-slate-700'
               }`}
             >
               <div className="flex justify-between items-start mb-2">
                 <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
-                    selectedBlock?.id === item.id ? 'bg-blue-400 text-white' : 'bg-slate-100 text-slate-500'
+                    isSelected
+                      ? 'bg-blue-400 text-white'
+                      : isCompared
+                      ? 'bg-emerald-200 text-emerald-900'
+                      : 'bg-slate-100 text-slate-500'
                 }`}>
                     RANK {idx + 1}
                 </span>
@@ -448,8 +551,10 @@ const RecommendationPage = () => {
               {/* 상태/리스크 태그 */}
               <div className="mt-2 flex flex-wrap gap-1 text-[10px]">
                 <span className={`px-2 py-0.5 rounded-full font-bold ${
-                  selectedBlock?.id === item.id
+                  isSelected
                     ? 'bg-white/10 border border-white/30'
+                    : isCompared
+                    ? 'bg-emerald-100 text-emerald-700 border border-emerald-200'
                     : 'bg-slate-100 text-slate-600'
                 }`}>
                   {item.analysis.statusTag}
@@ -492,9 +597,9 @@ const RecommendationPage = () => {
                         e.stopPropagation();
                         toggleCompare(idx);
                       }}
-                      className="w-3 h-3 accent-blue-600"
+                      className="w-3 h-3 accent-emerald-500"
                     />
-                  <span className={selectedBlock?.id === item.id ? 'text-blue-100' : 'text-slate-500'}>
+                  <span className={isSelected ? 'text-blue-100' : isCompared ? 'text-emerald-700' : 'text-slate-500'}>
                     비교 대상에 추가
                   </span>
                 </label>
@@ -505,7 +610,8 @@ const RecommendationPage = () => {
                 )}
               </div>
             </div>
-          ))}
+          );
+        })}
         </div>
       </div>
 
@@ -650,11 +756,23 @@ const RecommendationPage = () => {
                 const k = key;
                 return b.jibun || (k ? jibunMap[k] : null);
               })();
+              const isThisSelected =
+                selectedBlock &&
+                (selectedBlock === b ||
+                  (selectedBlock.id != null && b.id != null && selectedBlock.id === b.id) ||
+                  (selectedBlock.center &&
+                    b.center &&
+                    selectedBlock.center.lat === b.center.lat &&
+                    selectedBlock.center.lng === b.center.lng));
 
               return (
                 <span
                   key={b.id || idx}
-                  className="px-2 py-0.5 rounded-full bg-slate-100 text-[10px] text-slate-700 border border-slate-200 max-w-[210px] truncate"
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-medium border max-w-[210px] truncate ${
+                    isThisSelected
+                      ? 'bg-blue-500 text-white border-blue-600'
+                      : 'bg-emerald-100 text-emerald-800 border-emerald-400'
+                  }`}
                   title={
                     displayJibun
                       ? `${displayJibun} · ${Math.round(b.totalScore)}점`
