@@ -8,8 +8,10 @@ const axios = require('axios');
 const app = express();
 const fs = require('fs');
 const path = require('path');
+const { exec } = require('child_process');
 const OpenAI = require('openai');
 const cron = require('node-cron');
+const pipeline = require('util').promisify(require('stream').pipeline);
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const VECTOR_CACHE_PATH = path.join(__dirname, 'category_vectors.json');
 let categoryVectors = [];
@@ -22,6 +24,18 @@ const localDataList = parse(fileContent, {
     columns: true,
     skip_empty_lines: true
 });
+
+
+
+const TEMP_DIR = path.join(__dirname, 'temp');
+if (!fs.existsSync(TEMP_DIR)) {
+    fs.mkdirSync(TEMP_DIR);
+}
+const PYTHON_PATH = path.join(__dirname, 'venv', 'bin', 'python'); 
+const PARSER_SCRIPT = path.join(__dirname, 'hwp_hwpx_pdf_extract_text.py');
+
+
+
 app.use(cors());
 app.use(express.json());
 
@@ -922,25 +936,45 @@ function getDistance(lat1, lng1, lat2, lng2) {
 
 // openai 리포트 생성 API (고도화 버전)
 app.post('/api/analysis/report', async (req, res) => {
-    // 프론트에서 보낸 상세 객체들 (shops, trades, closures)
-    const { 
-        smallCat, 
-        radius, 
-        districts, 
-        landPriceStats, 
-        shops, 
-        trades, 
-        closures, 
-        address
+    // 프론트에서 보낸 상세 객체들 (shops, trades, closures 등)
+    const {
+        smallCat,
+        radius,
+        districts,
+        landPriceStats,
+        shops,
+        trades,
+        closures,
+        address,
+        population,     // { averageAge, totalPopulation }
+        spatialShops,   // [{ direction, count, avgDistance }]
+        blockSummary,   // { totalActive, totalClosed, averageVitality }
     } = req.body;
 
     console.log("======= 고도화 AI 분석 요청 =======");
     console.log(`위치 : ${address} | 업종: ${smallCat}`);
     console.log(`밀집도 확인 - 상가: ${shops.totalCount}개(평균 ${shops.averageDistance}m)`);
     console.log(`위험도 확인 - 폐업: ${closures.totalCount}개(평균 ${closures.averageDistance}m)`);
+    if (population?.averageAge !== undefined) {
+        console.log(`인구 평균 연령(추정): ${population.averageAge}세 / 총인구: ${population.totalPopulation}`);
+    }
+    if (blockSummary) {
+        console.log(`블록 요약 - 신규(영업): ${blockSummary.totalActive}, 폐업: ${blockSummary.totalClosed}`);
+    }
     console.log("=================================");
 
     try {
+        const totalBlocksActive = blockSummary?.totalActive ?? 0;
+        const totalBlocksClosed = blockSummary?.totalClosed ?? 0;
+        const closureRatio =
+            totalBlocksActive + totalBlocksClosed > 0
+                ? Number(
+                      (totalBlocksClosed / (totalBlocksActive + totalBlocksClosed)).toFixed(
+                          2
+                      )
+                  )
+                : null;
+
         const response = await axios.post(
             'https://api.openai.com/v1/chat/completions',
             {
@@ -954,7 +988,10 @@ app.post('/api/analysis/report', async (req, res) => {
                         2. 실거래 내역이 없다면, 제공된 '공시지가'를 주변 시세(통상 공시지가의 1.5~2배)로 환산하여 투자 가치를 추론하라.
                         3. 반드시 '마크다운' 형식을 사용하여 가공된 리포트 형태로 출력하라.
                         4. 지리적 환각에 주의하고, 철저히 제공된 수치에 집중하라.
-                        5. 단순히 수치를 나열하지 말고, '거리'와 '밀집도'의 상관관계를 분석하라.`
+                        5. 단순히 수치를 나열하지 말고, '거리'와 '밀집도'의 상관관계를 분석하라.
+                        6. '신규(영업 중)' 데이터와 '폐업' 데이터를 항상 구분해서 설명하고, 비율과 추세를 명확히 비교하라.
+                        7. 제공된 인구 평균 연령과 총 인구를 바탕으로, 업종 타깃 고객과의 적합도를 반드시 별도 소제목으로 분석하라.
+                        8. 제공된 방향·거리 요약(spatialShops)과 폐업 비율을 활용해서, 사용자가 선택한 중심 좌표가 상권의 중심에서 얼마나 치우쳐 있는지, 북/남/동/서 어느 방향으로 얼마나(m 단위 수준으로) 이동하는 것이 좋은지까지 구체적으로 제안하라.`
                     },
                     {
                         role: "user",
@@ -965,8 +1002,8 @@ app.post('/api/analysis/report', async (req, res) => {
                         - 분석 주소 : ${address}
                         - 포함된 주요 상권: ${districts?.length > 0 ? districts.join(', ') : '정보 없음'}
 
-                        ## 2. 입지 밀집도 데이터
-                        - **운영 중 상가**: 총 ${shops.totalCount}개 (중심점 기준 평균 거리: ${shops.averageDistance}m)
+                        ## 2. 입지 밀집도 데이터 (신규/폐업 구분)
+                        - **최근 개업**: 총 ${shops.totalCount}개 (중심점 기준 평균 거리: ${shops.averageDistance}m)
                         - **최근 실거래**: 총 ${trades.totalCount}건 (중심점 기준 평균 거리: ${trades.averageDistance}m)
                         - **최근 폐업**: 총 ${closures.totalCount}개 (중심점 기준 평균 거리: ${closures.averageDistance}m)
 
@@ -975,11 +1012,25 @@ app.post('/api/analysis/report', async (req, res) => {
                         - 핵심 입지 평균: ${landPriceStats.highAvg}만원
                         - 실거래 상세 내역: ${trades.items?.length > 0 ? JSON.stringify(trades.items) : '데이터 없음'}
 
+                        ## 4. 인구 통계 (행정동 기준)
+                        - 총 인구(추정): ${population?.totalPopulation ?? '정보 없음'}명
+                        - 평균 연령(추정): ${population?.averageAge ?? '정보 없음'}세
+                        - 해석 지침: 이 수치를 활용해 ${smallCat} 업종의 핵심 고객층(연령/라이프스타일)과의 궁합을 평가해라.
+
+                        ## 5. 방향별 상가 분포 요약 (중심 좌표 기준)
+                        - spatialShops JSON: ${Array.isArray(spatialShops) && spatialShops.length > 0 ? JSON.stringify(spatialShops) : '[]'}
+
+                        ## 6. 신규 vs 폐업 블록 요약
+                        - 신규(영업 중) 점포 합계: ${totalBlocksActive}
+                        - 폐업 점포 합계: ${totalBlocksClosed}
+                        - 폐업 비율(폐업 / 전체): ${closureRatio ?? '정보 없음'}
+
                         ## 요청 사항
-                        1. **입지 응집도 분석**: 상가와 실거래의 평균 거리를 비교하여, 현재 선택한 지점이 상권의 '중심'인지 '외곽'인지 판정할 것.
-                        2. **상권 활력도**: 운영 점포 대비 폐업 점포의 비율과 평균 거리를 분석하여 상권이 확장 중인지 쇠퇴 중인지 진단할 것. (특히 폐업 점포가 중심부에 몰려있는지 확인할 것)
-                        3. **자산 가치 추정**: 실거래 데이터가 있다면 분석하고, 없다면 지가 정보를 바탕으로 임대료와 권리금 수준을 추론할 것.
-                        4. **최종 제안**: ${smallCat} 업종 창업 시, 리스크를 줄이기 위한 구체적인 입지 전략을 제시할 것.
+                        1. **입지 응집도 분석**: 상가·실거래의 평균 거리와 방향별 분포(spatialShops)를 함께 고려해 현재 지점이 상권의 '핵심', '완충', '외곽' 중 어디에 해당하는지 판정할 것.
+                        2. **상권 활력도**: 운영 점포 vs 폐업 점포(블록 단위 합계 및 폐업 비율)를 비교해 상권이 확장 중인지 쇠퇴 중인지 진단할 것. 특히 폐업이 특정 방향/거리 구간에 몰려 있는지 설명할 것.
+                        3. **수요 적합도**: 제공된 평균 연령을 기준으로, ${smallCat} 업종이 해당 연령대/라이프스타일과 얼마나 맞는지, 어떤 콘셉트 조정이 필요한지 제안할 것.
+                        4. **자산 가치 추정**: 실거래 데이터가 있다면 이를, 없다면 지가 정보를 바탕으로 임대료·권리금 수준을 추론할 것.
+                        5. **최종 제안**: ${smallCat} 업종 창업 시, 리스크를 줄이기 위한 구체적인 입지 전략(선호 방향/거리, 피해야 할 구역 특징 등)을 3~5개의 실행 가능한 액션으로 정리할 것.
                         `
                     }
                 ],
@@ -991,6 +1042,205 @@ app.post('/api/analysis/report', async (req, res) => {
     } catch (error) { 
         console.error("AI Error:", error.response?.data || error.message);
         res.status(500).send("AI 분석 중 오류가 발생했습니다."); 
+    }
+});
+
+// 개별 블록 상세 리포트
+app.post('/api/analysis/block-report', async (req, res) => {
+    console.log("======= 개별 블록 상세 리포트 요청 =======");
+    try {
+        const { address, radius, category, block } = req.body;
+        console.log("block:", block);
+        console.log("address:", address);
+        console.log("radius:", radius);
+        console.log("category:", category);
+        if (!block) {
+            return res.status(400).json({ error: 'block payload is required' });
+        }
+
+        const {
+            jibun,
+            active = 0,
+            closed = 0,
+            vitality = 0,
+            totalScore = 0,
+            closureRatio = 0,
+        } = block;
+
+        const total = active + closed;
+        const closurePct = total > 0 ? Math.round((closed / total) * 100) : Math.round(closureRatio * 100);
+
+        let vitalityLabel = '보합 구간';
+        if (vitality > 0.2) vitalityLabel = '성장 구간';
+        else if (vitality < -0.2) vitalityLabel = '위축 구간';
+
+        let riskLabel = '폐업 리스크 낮음';
+        if (closurePct >= 40) riskLabel = '폐업 리스크 높음';
+        else if (closurePct >= 20) riskLabel = '폐업 리스크 보통';
+
+        const systemPrompt = `
+너는 대한민국 상권 컨설팅 전문가다.
+해당 보고서는 "하나의 후보 블록(건물 단위)"에 대한 짧은 요약 리포트다.
+
+[작성 원칙]
+1. 보고서는 마크다운 형식으로, 하지만 너무 길지 않게 3~5개의 소제목과 10문장 내외로 작성한다.
+2. 소제목 예시: "입지 요약", "신규 vs 폐업 흐름", "위험 요인", "추천 활용 전략".
+3. 숫자는 반드시 한국어+숫자를 같이 써라. (예: "폐업 비율은 약 25%(4/16개) 수준입니다.")
+4. "신규(영업 중)" vs "폐업"을 꼭 구분해서 설명하되, 과도한 공포감을 주지 말고, 실무적인 인사이트 중심으로 작성한다.
+5. 사용자가 소상공인 창업/이전 후보지를 검토하는 상황이라고 가정하고, "이 블록 단독 기준"에서 장단점을 짚어준다.
+6. 최종 문단에는 "어떤 성향의 점주에게 어울리는 입지인지"를 한 줄로 정리해준다. (예: "보수적인 점주에게는 다소 부담스러운 입지", "성장성에 베팅하려는 점주에게 적합" 등)`;
+
+        const userPrompt = `
+[후보 블록 기본 정보]
+- 행정/지번: ${jibun || '지번 정보 없음'}
+- 분석 기준 주소(대략적인 위치): ${address || '주소 정보 없음'}
+- 반경: 약 ${radius || 'N/A'}m
+- 업종(소분류): ${category || '전체 업종 기준'}
+
+[상권 지표 요약]
+- 신규(영업 중) 업소 수: ${active}개
+- 폐업 업소 수: ${closed}개
+- 폐업 비율: 약 ${closurePct}% (${closed}/${total || active + closed || 1}개 기준)
+- 활력도 지표(vitality): ${vitality} (${vitalityLabel})
+- 종합 점수(프론트엔드 스코어): ${Math.round(totalScore)}점
+- 리스크 라벨: ${riskLabel}
+
+[요청 사항]
+- 위 정보를 토대로 "이 블록 단독 기준"에서의 상권 상태를 직관적으로 설명해 주세요.
+- 신규/폐업 흐름을 바탕으로, 이 구역의 안정성/변동성을 짚어 주세요.
+- 다만, 데이터가 블록 단위로 국소적이라는 점을 감안해서, "이 일대 상권 전체"에 대한 과도한 일반화는 피해주세요.
+- 이 블록에 입점하는 경우, 어떤 전략(예: 저임대 기반 보수적 전략, 신규 수요 선점 전략 등)이 어울릴지 간단히 제안해 주세요.`;
+
+        const completion = await axios.post(
+            'https://api.openai.com/v1/chat/completions',
+            {
+                model: 'gpt-4o-mini',
+                messages: [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: userPrompt },
+                ],
+                temperature: 0.4,
+            },
+            {
+                headers: {
+                    Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+                    'Content-Type': 'application/json',
+                },
+            }
+        );
+        console.log("completion:", completion);
+        const report = completion.data.choices?.[0]?.message?.content || '';
+        console.log("report:", report);
+        return res.json({ report });
+    } catch (error) {
+        console.error('/api/analysis/block-report error:', error?.response?.data || error.message || error);
+        return res.status(500).json({ error: 'Failed to generate block report' });
+    }
+});
+
+// 다중 블록 비교 리포트
+app.post('/api/analysis/compare-blocks', async (req, res) => {
+    try {
+        const { address, radius, category, blocks } = req.body;
+
+        if (!Array.isArray(blocks) || blocks.length < 2) {
+            return res.status(400).json({ error: 'At least two blocks are required for comparison' });
+        }
+
+        const summarized = blocks.map((b, idx) => {
+            const active = b.active || 0;
+            const closed = b.closed || 0;
+            const vitality = b.vitality || 0;
+            const total = active + closed;
+            const closureRatio = total > 0 ? closed / total : (b.closureRatio || 0);
+            const closurePct = Math.round(closureRatio * 100);
+
+            let vitalityLabel = '보합 구간';
+            if (vitality > 0.2) vitalityLabel = '성장 구간';
+            else if (vitality < -0.2) vitalityLabel = '위축 구간';
+
+            let riskLabel = '폐업 리스크 낮음';
+            if (closurePct >= 40) riskLabel = '폐업 리스크 높음';
+            else if (closurePct >= 20) riskLabel = '폐업 리스크 보통';
+
+            return {
+                index: idx + 1,
+                label: b.label || `후보 ${idx + 1}`,
+                jibun: b.jibun || '지번 정보 없음',
+                active,
+                closed,
+                vitality,
+                vitalityLabel,
+                closurePct,
+                riskLabel,
+                totalScore: Math.round(b.totalScore || 0),
+            };
+        });
+
+        const systemPrompt = `
+너는 소상공인 상권 분석을 전문으로 하는 컨설턴트다.
+이번 보고서는 "최대 3개의 후보 블록"을 서로 비교해서, 성향별로 어떤 블록이 더 적합한지 제안하는 용도다.
+
+[작성 원칙]
+1. 결과는 마크다운 형식으로 작성하되, 한눈에 비교가 되도록 표와 리스트를 적절히 활용한다.
+2. 전체 길이는 15~25문장 이내로 유지한다.
+3. 각 후보별로 "성장성", "안정성(폐업 리스크)", "전략 포인트"를 2~3줄로 요약한다.
+4. 그 다음, 후보들끼리의 상대 비교(예: "1번 후보 vs 2번 후보")를 통해 강·약점을 정리한다.
+5. 마지막에는 "보수적인 점주", "성장에 베팅하는 점주" 등 2~3가지 타입 별로 어떤 후보를 우선 고려하면 좋을지 추천한다.
+6. 숫자는 한국어 설명과 함께, 예: "폐업 비율은 약 20%(3/15개) 수준"처럼 구체적으로 표현한다.
+7. 데이터는 블록 단위로 제한적이라는 점을 한 문장 정도에서 언급하고, 과도한 확신 보다는 "우세/열세" 수준의 표현을 사용한다.`;
+
+        const blocksText = summarized
+            .map((b) => {
+                const total = b.active + b.closed || 1;
+                return `- ${b.label} (지번: ${b.jibun})
+  - 신규(영업 중): ${b.active}개
+  - 폐업: ${b.closed}개
+  - 폐업 비율: 약 ${b.closurePct}% (${b.closed}/${total}개 기준)
+  - 활력도: ${b.vitality} (${b.vitalityLabel})
+  - 리스크 라벨: ${b.riskLabel}
+  - 프론트엔드 종합 점수: ${b.totalScore}점`;
+            })
+            .join('\n\n');
+
+        const userPrompt = `
+[공통 맥락]
+- 분석 기준 주소(대략적인 위치): ${address || '주소 정보 없음'}
+- 반경: 약 ${radius || 'N/A'}m
+- 업종(소분류): ${category || '전체 업종 기준'}
+
+[비교 대상 후보 블록 목록]
+${blocksText}
+
+[요청 사항]
+- 위 후보들을 서로 비교하여, 성장성/안정성/리스크 관점에서 상대적인 위치를 설명해 주세요.
+- 특히, 폐업 비율이 높은 후보와 낮은 후보의 차이를 "임대 리스크" 관점에서 해석해 주세요.
+- 각 후보에 대해 어떤 점주 성향(안정 추구, 성장 추구, 실험적 등)에 어울리는지 제안해 주세요.
+- 마지막에 "성장 우선 관점에서 추천 순위"와 "안정 우선 관점에서 추천 순위"를 각각 1~3위까지 정리해 주세요.`;
+
+        const completion = await axios.post(
+            'https://api.openai.com/v1/chat/completions',
+            {
+                model: 'gpt-4o-mini',
+                messages: [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: userPrompt },
+                ],
+                temperature: 0.4,
+            },
+            {
+                headers: {
+                    Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+                    'Content-Type': 'application/json',
+                },
+            }
+        );
+
+        const report = completion.data.choices?.[0]?.message?.content || '';
+        return res.json({ report });
+    } catch (error) {
+        console.error('/api/analysis/compare-blocks error:', error?.response?.data || error.message || error);
+        return res.status(500).json({ error: 'Failed to generate compare report' });
     }
 });
 
@@ -1264,7 +1514,8 @@ app.get('/api/get-support', async (req, res) => {
             const isRegionMatch = agency.startsWith(region) || agency.startsWith('중소');
             // 조건 2: 지원 대상이 정확히 '소상공인' (또는 포함)
             const isTargetMatch = target.includes('소상공인'); 
-
+            if (isRegionMatch && isTargetMatch)
+                console.log(item);
             return isRegionMatch && isTargetMatch;
         }).map(item => ({
             id: item.pblancId,
@@ -1281,7 +1532,8 @@ app.get('/api/get-support', async (req, res) => {
             url: `https://www.bizinfo.go.kr${item.pblancUrl}`,
             type: item.pldirSportRealmLclasCodeNm,
             fileUrl : item.printFlpthNm || "",
-            fileName : item.printFileNm || ""
+            fileName : item.printFileNm || "",
+            meth : item.reqstMthPapersCn || ""
         }));
 
         console.log(`✅ [지원사업] ${region} 소상공인 맞춤 ${filteredItems.length}건 반환`);
@@ -1746,7 +1998,9 @@ app.get('/api/analysis/population', async (req, res) => {
             }
         });
         console.log("sgis geores : ");
-        //console.log(geoRes);
+        console.log(geoRes.data.errMsg);
+        console.log(geoRes.data.errCd);
+        console.log(geoRes.data);
         console.log(geoRes.status);
         const geoResult = geoRes.data.result?.resultdata[0];
         if (!geoResult) return res.status(404).json({ error: "해당 주소의 행정 코드를 찾을 수 없습니다." });
@@ -1815,5 +2069,130 @@ app.get('/api/analysis/population', async (req, res) => {
     } catch (err) {
         console.error("인구 분석 오류:", err);
         res.status(500).json({ error: "데이터 조회 중 오류 발생" });
+    }
+});
+
+
+
+
+
+
+const downloadFile = async (url, filename) => {
+    try {
+        const response = await axios({
+            url,
+            method: 'GET',
+            responseType: 'stream'
+        });
+        
+        // 파일 확장자 추출 (없으면 .tmp)
+        let ext = path.extname(url).split('?')[0] || '.tmp';
+        // hwp, hwpx, pdf가 아니면 강제로 처리 (공고문들이 url에 확장자가 없는 경우가 있음)
+        if (!['.hwp', '.hwpx', '.pdf'].includes(ext.toLowerCase())) {
+             // Content-Disposition 헤더 확인 로직이 복잡하므로, 
+             // 여기서는 일단 hwp로 가정하거나 url 패턴에 따라 처리 필요.
+             // 간단하게 사용자가 넘겨준 filename의 확장자를 우선 사용
+             ext = path.extname(filename) || ext;
+        }
+
+        const savePath = path.join(TEMP_DIR, `download_${Date.now()}${ext}`);
+        await pipeline(response.data, fs.createWriteStream(savePath));
+        return savePath;
+    } catch (error) {
+        console.error('파일 다운로드 실패:', error);
+        throw new Error('파일 다운로드에 실패했습니다.');
+    }
+};
+
+/**
+ * [함수 2] 파이썬 스크립트로 텍스트 추출
+ */
+const extractTextFromDoc = (filePath) => {
+    return new Promise((resolve, reject) => {
+        const command = `"${PYTHON_PATH}" "${PARSER_SCRIPT}" "${filePath}"`;
+        
+        exec(command, { encoding: 'utf8', maxBuffer: 1024 * 1024 * 10 }, (error, stdout, stderr) => {
+            if (error) {
+                console.error("Extract Error:", stderr);
+                reject(error);
+                return;
+            }
+            resolve(stdout.trim());
+        });
+    });
+};
+
+/**
+ * [함수 3] GPT에게 요약 요청
+ */
+const summarizeWithGPT = async (text) => {
+    if (!text || text.length < 50) return "내용을 추출할 수 없거나 문서가 비어있습니다.";
+
+    // 토큰 비용 절약을 위해 앞부분 4000자만 사용 (공고문 핵심은 보통 앞부분에 있음)
+    const slicedText = text;
+
+    try {
+        const completion = await openai.chat.completions.create({
+            model: "gpt-4o-mini", // 가성비 모델 사용
+            messages: [
+                {
+                    role: "system",
+                    content: "너는 소상공인 지원사업 전문가야. 공고문을 읽고 구체적으로 다음 5가지 항목을 불렛포인트 없이 줄글로 10줄 이내로 보기좋게 줄을 바꾸어서 요약해줘. [1.지원 대상, 2.지원 내용(금액), 3.신청 방법, 4.필수 서류, 5.유의 사항]. 말투는 '~~합니다.' 처럼 정중하게 해줘."
+                },
+                {
+                    role: "user",
+                    content: `다음 공고문 내용을 요약해줘:\n\n${slicedText}`
+                }
+            ],
+            temperature: 0.5,
+        });
+        return completion.choices[0].message.content;
+    } catch (error) {
+        console.error("GPT Error:", error);
+        throw new Error("AI 요약 중 오류가 발생했습니다.");
+    }
+};
+
+/**
+ * [API] 요약 생성 및 DB 업데이트 엔드포인트
+ */
+app.post('/api/support/summarize', async (req, res) => {
+    const { id, fileUrl, fileName } = req.body;
+
+    if (!fileUrl) return res.status(400).json({ error: '파일 URL이 없습니다.' });
+
+    let savedFilePath = null;
+
+    try {
+        console.log(`[시작] 요약 요청: ID ${id}, 파일: ${fileName}`);
+
+        // 1. 파일 다운로드
+        savedFilePath = await downloadFile(fileUrl, fileName);
+        console.log(`[1/4] 다운로드 완료: ${savedFilePath}`);
+
+        // 2. 텍스트 추출
+        const extractedText = await extractTextFromDoc(savedFilePath);
+        console.log(`[2/4] 텍스트 추출 완료 (${extractedText.length}자)`);
+
+        // 3. GPT 요약
+        const summary = await summarizeWithGPT(extractedText);
+        console.log(`[3/4] GPT 요약 완료`);
+
+        // 4. DB 업데이트 (선택 사항: 다음에 또 요청하지 않도록 DB에 저장)
+        // support_programs 테이블에 summary 컬럼이 있다고 가정
+        //if (id) {
+        //    await pool.query('UPDATE support_programs SET summary = ? WHERE id = ?', [summary, id]);
+        //}
+
+        // 5. 임시 파일 삭제
+        fs.unlinkSync(savedFilePath);
+
+        res.json({ success: true, summary });
+
+    } catch (error) {
+        console.error("요약 프로세스 실패:", error);
+        // 에러 나도 임시 파일은 삭제 시도
+        if (savedFilePath && fs.existsSync(savedFilePath)) fs.unlinkSync(savedFilePath);
+        res.status(500).json({ error: error.message });
     }
 });

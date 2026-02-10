@@ -106,7 +106,7 @@ const AnalysisSidebar: React.FC<AnalysisSidebarProps> = (p) => {
           value={locQuery}
           onChange={(e) => setLocQuery(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && searchLocation()}
-          placeholder="주소 입력"
+          placeholder="예 : 부산광역시 강서구"
           className="w-full p-4 pr-12 border-2 placeholder:text-slate-300 border-slate-100 rounded-2xl text-sm font-bold focus:border-blue-600 outline-none transition-all"
         />
         <button onClick={searchLocation} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400">

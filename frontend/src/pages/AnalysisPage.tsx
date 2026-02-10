@@ -33,6 +33,8 @@ const AnalysisPage = () => {
   const districtPolygonsRef = useRef<any[]>([]); // 폴리곤 객체 저장용
   const closedMarkersRef = useRef<any[]>([]); // 폐업 마커 저장용
   const closedPolygonsRef = useRef<any[]>([]); // 블록 폴리곤 저장용 Ref
+  const hasHydratedFromStore = useRef(false); // 전역 상태에서 한 번만 복원
+  const hasRestoredOverlays = useRef(false);  // 지도 오버레이 복원 여부
   
   const [showPrompt, setShowPrompt] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
@@ -50,15 +52,33 @@ const AnalysisPage = () => {
   const [showTrades, setShowTrades] = useState(true);
   const [showDashboard, setShowDashboard] = useState(false);
   const [showDistricts, setShowDistricts] = useState(true); // 상권 영역 표시 여부
-  const [aiReport, setAiReport] = useState<string>("");
+  const aiReport = useAnalysisStore((state) => state.aiReport);
+  const supportPrograms = useAnalysisStore((state) => state.supportPrograms) as SupportProgram[];
   const [isReportLoading, setIsReportLoading] = useState(false);
   const [showClosed, setShowClosed] = useState(true); // 폐업 마커 표시 여부
   const [regionCode, setRegionCode] = useState("");
-  const [supportPrograms, setSupportPrograms] = useState<SupportProgram[]>([]);
   const [isSupportLoading, setIsSupportLoading] = useState(false);
   const [isLoadingClosed, setIsLoadingClosed] = useState(false); // 로딩 상태 추가
-
   const setAnalysisResult = useAnalysisStore((state) => state.setAnalysisResult);
+  const locationConsent = useAnalysisStore((state) => state.locationConsent);
+  const setLocationConsent = useAnalysisStore((state) => state.setLocationConsent);
+  const storedCoords = useAnalysisStore((state) => state.coords);
+  const storedRadius = useAnalysisStore((state) => state.radius);
+  const storedAddress = useAnalysisStore((state) => state.address);
+  const storedCategory = useAnalysisStore((state) => state.selectedCategory);
+
+  // zustand 기반 지원제도 setter (useState API와 동일하게 동작하도록 래핑)
+  const setSupportPrograms = (
+    updater: React.SetStateAction<SupportProgram[]>
+  ) => {
+    setAnalysisResult({
+      supportPrograms:
+        typeof updater === 'function'
+          ? (updater as (prev: SupportProgram[]) => SupportProgram[])(supportPrograms)
+          : updater,
+    });
+  };
+
   useEffect(() => {
     fetch(`${API_BASE_URL}/categories/large`)
       .then(res => res.json())
@@ -66,7 +86,139 @@ const AnalysisPage = () => {
       .catch(err => console.error("대분류 로드 실패:", err));
   }, []);
 
+  // 전역 분석 결과가 있으면 사이드바/대시보드 상태를 한 번 복원
+  useEffect(() => {
+    if (hasHydratedFromStore.current) return;
+
+    if ((storedRadius && storedRadius > 0) || storedCategory?.small) {
+      hasHydratedFromStore.current = true;
+
+      setCoords(storedCoords);
+      if (storedAddress) setAddress(storedAddress);
+      setRadius(storedRadius);
+
+      if (storedCategory.large) setSelectedLarge(storedCategory.large);
+      if (storedCategory.mid) setSelectedMid(storedCategory.mid);
+      if (storedCategory.small) setSelectedSmall(storedCategory.small);
+
+      setShowDashboard(true);
+      setShowPrompt(false);
+    }
+  }, [storedCoords, storedRadius, storedAddress, storedCategory]);
+
+  // 지도 객체가 준비된 뒤, 스토어에 저장된 데이터로 오버레이/마커 복원
+  useEffect(() => {
+    const { kakao } = window as any;
+    if (!kakao || !mapInstance.current) return;
+    if (!hasHydratedFromStore.current) return;
+    if (hasRestoredOverlays.current) return;
+    if (!storedCoords || !storedRadius || storedRadius === 0) return;
+
+    // coords/radius 상태가 스토어 값과 동기화된 이후에만 복원 수행
+    if (
+      coords.lat !== storedCoords.lat ||
+      coords.lng !== storedCoords.lng ||
+      radius !== storedRadius
+    ) {
+      return;
+    }
+
+    hasRestoredOverlays.current = true;
+
+    // 1) 중심 마커 & 반경 원은 다른 effect에서 복원
+    // 2) 공시지가(landPrices)
+    if (useAnalysisStore.getState().landPrices.length > 0) {
+      const land = useAnalysisStore.getState().landPrices;
+      landDataRef.current = land;
+      displayLandPriceMarkers(land);
+    }
+
+    // 3) 인근 상가(shops) – 기존 그룹화 로직 재사용
+    const storedShops = useAnalysisStore.getState().shops;
+    if (Array.isArray(storedShops) && storedShops.length > 0) {
+      const storeGroups = new Map<string, any[]>();
+      storedShops.forEach((shop: any) => {
+        const key = `${shop.lat},${shop.lon}`;
+        if (!storeGroups.has(key)) storeGroups.set(key, []);
+        storeGroups.get(key)?.push(shop);
+      });
+
+      markersRef.current = [];
+      storeGroups.forEach((shops, key) => {
+        const [lat, lon] = key.split(',').map(Number);
+        const marker = new kakao.maps.Marker({
+          position: new kakao.maps.LatLng(lat, lon),
+          map: showShops ? mapInstance.current : null,
+          zIndex: 1,
+        });
+
+        kakao.maps.event.addListener(marker, 'click', () => {
+          let content = '';
+          if (shops.length === 1) {
+            const shop = shops[0];
+            content = `<div style="padding:15px; min-width:150px;">
+              <strong style="font-size:11px;">${shop.store_name}</strong><br/>
+              <span style="font-size:12px; color:#666;">${shop.category_small_name}</span>
+            </div>`;
+          } else {
+            const listHtml = shops
+              .map(
+                (s: any, index: number) => `
+                <li style="padding: 6px 0; border-bottom: ${
+                  index === shops.length - 1 ? 'none' : '1px solid #eee'
+                };">
+                  <div style="font-weight:bold; font-size:13px; color:#333;">${s.store_name}</div>
+                  <div style="font-size:11px; color:#888;">${s.category_small_name}</div>
+                </li>`
+              )
+              .join('');
+            content = `<div style="padding:15px; min-width:220px; max-height:250px; overflow-y:auto;">
+              <div style="margin-bottom:8px; font-weight:bold; border-bottom:2px solid #3b82f6; padding-bottom:6px;">🏢 이 건물의 상가 (${shops.length})</div>
+              <ul style="list-style:none; padding:0; margin:0;">${listHtml}</ul>
+            </div>`;
+          }
+          handleMarkerInteraction(marker, content);
+        });
+        markersRef.current.push(marker);
+      });
+    }
+
+    // 4) 주요 상권 폴리곤(majorDistricts)
+    const storedDistricts = useAnalysisStore.getState().majorDistricts;
+    if (Array.isArray(storedDistricts) && storedDistricts.length > 0) {
+      displayMajorDistricts(storedDistricts);
+    }
+
+    // 5) 폐업/활력도 블록(Blocks)
+    const storedBlocks = useAnalysisStore.getState().blocks;
+    if (Array.isArray(storedBlocks) && storedBlocks.length > 0) {
+      drawClosedBlocks(storedBlocks);
+    }
+
+    // 6) 실거래 데이터는 원래 로직과 동일하게 재요청 (주소/반경 기반)
+    fetchRealEstateData(storedCoords.lat, storedCoords.lng, storedRadius);
+  }, [coords.lat, coords.lng, radius]);
+
+  // 이전 세션에서 위치 권한 여부를 기억하고 있으면, 재진입 시 바로 지도 초기화
+  useEffect(() => {
+    const { kakao } = window as any;
+    if (!kakao) return;
+
+    kakao.maps.load(() => {
+      if (locationConsent === 'unknown' || mapInstance.current) return;
+
+      setShowPrompt(false);
+      setIsLoading(true);
+
+      const base = storedCoords || coords;
+      initMap(base.lat, base.lng);
+    });
+    // 최초 진입 때만 확인하면 되므로 dependency 배열은 비워둔다
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleAllowLocation = () => {
+    setLocationConsent('allowed');
     setShowPrompt(false); setIsLoading(true);
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
@@ -77,6 +229,7 @@ const AnalysisPage = () => {
   };
 
   const handleDenyLocation = () => {
+    setLocationConsent('denied');
     setShowPrompt(false); setIsLoading(true);
     setTimeout(() => initMap(37.498095, 127.027610), 500);
   };
@@ -362,8 +515,78 @@ const AnalysisPage = () => {
       const popData = await popRes.json();
       console.log("pop res : ");
       console.log(popData);
+
+      // 인구 통계: 연령대별 인구를 이용해 대략적인 평균 연령 계산
+      const ageBuckets = popData?.data || {};
+      const ageGroups = [
+        { key: 'age_eq_10', mid: 15 },
+        { key: 'age_eq_20', mid: 25 },
+        { key: 'age_eq_30', mid: 35 },
+        { key: 'age_eq_40', mid: 45 },
+        { key: 'age_eq_50', mid: 55 },
+        { key: 'age_eq_60', mid: 65 },
+        { key: 'age_gte_70', mid: 75 },
+      ];
+      let ageWeightedSum = 0;
+      let ageTotalCount = 0;
+      ageGroups.forEach(({ key, mid }) => {
+        const cnt = Number(ageBuckets[key] || 0);
+        if (cnt > 0) {
+          ageWeightedSum += cnt * mid;
+          ageTotalCount += cnt;
+        }
+      });
+      const averageAge =
+        ageTotalCount > 0 ? Math.round(ageWeightedSum / ageTotalCount) : null;
+
+      const populationSummary = {
+        averageAge,
+        totalPopulation: Number(popData?.total_sum || 0),
+      };
+
+      // 신규 / 폐업 블록 요약
+      const blockSummary =
+        Array.isArray(features) && features.length > 0
+          ? (() => {
+              let totalActive = 0;
+              let totalClosed = 0;
+              let vitalitySum = 0;
+              let vitalityCount = 0;
+
+              features.forEach((f: any) => {
+                const props = f.properties || {};
+                const a = Number(props.activeCount || 0);
+                const c = Number(props.closedCount || 0);
+                const v = props.vitality;
+
+                totalActive += a;
+                totalClosed += c;
+                if (typeof v === 'number') {
+                  vitalitySum += v;
+                  vitalityCount += 1;
+                }
+              });
+
+              return {
+                totalActive,
+                totalClosed,
+                averageVitality:
+                  vitalityCount > 0
+                    ? Number((vitalitySum / vitalityCount).toFixed(2))
+                    : 0,
+              };
+            })()
+          : null;
+
+      // 방향/거리 기반 상가 요약
+      const spatialShops = summarizeShopsByDirection(
+        shopData,
+        coords.lat,
+        coords.lng,
+        radius
+      );
+
       // ★ 6. Zustand 스토어에 데이터 업데이트
-      // setAnalysisResult는 컴포넌트 상단에서 const { setAnalysisResult } = useAnalysisStore(); 로 가져와야 합니다.
       setAnalysisResult({
           coords: { lat: coords.lat, lng: coords.lng },
           radius: radius,
@@ -373,15 +596,24 @@ const AnalysisPage = () => {
               mid: selectedMid,     // 현재 AnalysisPage의 중분류 state
               small: selectedSmall   // 현재 AnalysisPage의 소분류 state
           },
+          shops: shopData,
+          closedShops: features,
           landPrices: landData,
           majorDistricts: distData,
-          blocks: processedBlocks 
+          blocks: processedBlocks,
+          population: populationSummary,
       });
       
       console.log("✅ 데이터가 Store에 저장되었습니다.");
       
       // 후속 작업
       fetchSupportPrograms();
+      generateAIReport({
+        population: populationSummary,
+        spatialShops,
+        blockSummary,
+        blocks: processedBlocks,
+      });
       setShowDashboard(true);
 
     } catch (err) {
@@ -404,6 +636,22 @@ const AnalysisPage = () => {
             const res = await fetch(`${API_BASE_URL}/real-estate/trade?lawdCd=${region.code.substring(0, 5)}&umdNm=${encodeURIComponent(region.region_3depth_name)}`);
             const rawData = await res.json();
             if (rawData) {
+              // 리포트/그래프용으로 최근 실거래 요약을 전역 스토어에 저장
+              try {
+                const summarized = (Array.isArray(rawData) ? rawData : [])
+                  .slice(0, 100) // 최대 100건만 사용
+                  .map((item: any) => ({
+                    dealAmount: item.dealAmount,
+                    dealYear: item.dealYear,
+                    dealMonth: item.dealMonth,
+                    dealDay: item.dealDay,
+                    jibun: item.jibun,
+                  }));
+                setAnalysisResult({ recentTrades: summarized });
+              } catch (e) {
+                console.error('recentTrades 요약 중 오류:', e);
+              }
+
               rawData.forEach((item: any) => {
                 // 안전하게 문자열로 변환 후 체크 (item.jibun 에러 해결)
                 const jibunStr = item.jibun ? String(item.jibun) : "";
@@ -490,7 +738,8 @@ const AnalysisPage = () => {
         nameOverlay.setMap(null);
       });
 
-      polygon.setMap(mapInstance.current);
+      // 현재 토글 상태(showDistricts)에 따라 표시 여부 결정
+      polygon.setMap(showDistricts ? mapInstance.current : null);
       districtPolygonsRef.current.push(polygon);
     });
   };
@@ -531,13 +780,73 @@ const AnalysisPage = () => {
     return stats;
   };
 
-  const generateAIReport = async () => {
+  // 상가 데이터의 방향/거리 요약
+  const summarizeShopsByDirection = (
+    shops: any[],
+    centerLat: number,
+    centerLng: number,
+    maxRadius: number
+  ) => {
+    if (!Array.isArray(shops) || shops.length === 0) return [];
+
+    const toRad = (deg: number) => (deg * Math.PI) / 180;
+    const dirLabels = ['북', '북동', '동', '남동', '남', '남서', '서', '북서'];
+
+    const buckets: Record<
+      string,
+      { direction: string; count: number; totalDistance: number }
+    > = {};
+
+    shops.forEach((shop) => {
+      const lat = Number(shop.lat);
+      const lng = Number(shop.lon ?? shop.lng);
+      if (!lat || !lng) return;
+
+      const dLat = (lat - centerLat) * 111000;
+      const dLng =
+        (lng - centerLng) * 111000 * Math.cos(toRad(centerLat));
+      const dist = Math.sqrt(dLat * dLat + dLng * dLng);
+
+      if (maxRadius > 0 && dist > maxRadius) return;
+
+      const angle = (Math.atan2(dLng, dLat) * 180) / Math.PI; // 0도 = 북
+      const idx = Math.round(((angle + 360) % 360) / 45) % 8;
+      const key = dirLabels[idx];
+
+      if (!buckets[key]) {
+        buckets[key] = { direction: key, count: 0, totalDistance: 0 };
+      }
+      buckets[key].count += 1;
+      buckets[key].totalDistance += dist;
+    });
+
+    return Object.values(buckets).map((b) => ({
+      direction: b.direction,
+      count: b.count,
+      avgDistance: b.count > 0 ? Math.round(b.totalDistance / b.count) : 0,
+    }));
+  };
+
+  const generateAIReport = async (options?: {
+    population?: { averageAge: number | null; totalPopulation: number };
+    spatialShops?: { direction: string; count: number; avgDistance: number }[];
+    blockSummary?: {
+      totalActive: number;
+      totalClosed: number;
+      averageVitality: number;
+    } | null;
+    blocks?: any[];
+  }) => {
     if (!selectedSmall || radius === 0) return;
     
     setIsReportLoading(true);
     const { kakao } = window;
     const center = new kakao.maps.LatLng(coords.lat, coords.lng);
     const { midAvg, highAvg } = calculateLandPriceStats();
+    const population = options?.population;
+    const spatialShops = options?.spatialShops || [];
+    const blockSummary = options?.blockSummary || null;
+    const blocksForVitality = options?.blocks || [];
 
     // 1. 거리 및 통계 계산 헬퍼 함수
     const getDistanceStats = (markers: any[], isLngLat = false) => {
@@ -560,18 +869,72 @@ const AnalysisPage = () => {
     };
 
     // 2. 각 항목별 데이터 가공
-    // 상가 데이터 (현재 지도에 표시된 markersRef 기준)
+    // (1) 선택 업종 상가 데이터 (현재 지도에 표시된 markersRef 기준)
     const shopStats = getDistanceStats(markersRef.current);
 
-    // 실거래 데이터 (estateMarkersRef 기준)
+    // (2) 실거래 데이터 (estateMarkersRef 기준)
     const tradeStats = getDistanceStats(estateMarkersRef.current);
     const tradeDetails = estateMarkersRef.current
       .map(m => m.data)
       .filter(d => d !== undefined)
       .slice(0, 5);
 
-    // 폐업 데이터 (closedMarkersRef 기준)
-    const closedStats = getDistanceStats(closedMarkersRef.current);
+    // (3) 신규/폐업 상권 활력도: 블록 데이터(신규/폐업) 기준으로 다시 계산
+    const computeVitalityFromBlocks = () => {
+      if (!Array.isArray(blocksForVitality) || blocksForVitality.length === 0) {
+        return null;
+      }
+
+      const toRad = (deg: number) => (deg * Math.PI) / 180;
+      const latRad = toRad(coords.lat);
+
+      let totalNew = 0;
+      let totalClosed = 0;
+      let sumNewDist = 0;
+      let sumClosedDist = 0;
+
+      blocksForVitality.forEach((b: any) => {
+        const a = Number(b?.properties?.activeCount || 0);
+        const c = Number(b?.properties?.closedCount || 0);
+        const clat = Number(b?.center?.lat);
+        const clng = Number(b?.center?.lng);
+        if (!clat || !clng) return;
+
+        const dLat = (clat - coords.lat) * 111000;
+        const dLng = (clng - coords.lng) * 111000 * Math.cos(latRad);
+        const dist = Math.sqrt(dLat * dLat + dLng * dLng);
+        if (dist > radius) return;
+
+        if (a > 0) {
+          totalNew += a;
+          sumNewDist += a * dist;
+        }
+        if (c > 0) {
+          totalClosed += c;
+          sumClosedDist += c * dist;
+        }
+      });
+
+      return {
+        newStats: {
+          count: totalNew,
+          avgDistance:
+            totalNew > 0 ? Math.round(sumNewDist / totalNew) : 0,
+        },
+        closedStats: {
+          count: totalClosed,
+          avgDistance:
+            totalClosed > 0 ? Math.round(sumClosedDist / totalClosed) : 0,
+        },
+      };
+    };
+
+    const vitalityFromBlocks = computeVitalityFromBlocks();
+
+    // (4) 폐업 데이터 (블록 기반이 우선, 없으면 마커 기반)
+    const closedStats = vitalityFromBlocks
+      ? vitalityFromBlocks.closedStats
+      : getDistanceStats(closedMarkersRef.current);
 
     const districtNames = districtPolygonsRef.current
       .map(p => p.name)
@@ -587,10 +950,16 @@ const AnalysisPage = () => {
           districts: districtNames,
           landPriceStats: { midAvg, highAvg },
           // 고도화된 밀집도 및 거리 데이터
-          shops: {
-            totalCount: shopStats.count,
-            averageDistance: shopStats.avgDistance
-          },
+          // 신규 상가는 gov_permit 기반 블록(activeCount)의 합계를 우선 사용
+          shops: vitalityFromBlocks
+            ? {
+                totalCount: vitalityFromBlocks.newStats.count,
+                averageDistance: vitalityFromBlocks.newStats.avgDistance,
+              }
+            : {
+                totalCount: shopStats.count,
+                averageDistance: shopStats.avgDistance
+              },
           trades: {
             totalCount: tradeStats.count,
             averageDistance: tradeStats.avgDistance,
@@ -600,12 +969,17 @@ const AnalysisPage = () => {
             totalCount: closedStats.count,
             averageDistance: closedStats.avgDistance
           },
-          address: address
+          address: address,
+          population,
+          spatialShops,
+          blockSummary,
         })
       });
 
       const data = await response.json();
-      if (data.report) setAiReport(data.report);
+      if (data.report) {
+        setAnalysisResult({ aiReport: data.report });
+      }
       
     } catch (err) {
       console.error("AI Report Error:", err);
@@ -799,9 +1173,10 @@ const AnalysisPage = () => {
             polygon.setMap(showClosed ? mapInstance.current : null);
             // 클릭 시 정보 창
             kakao.maps.event.addListener(polygon, 'click', (mouseEvent: any) => {
+                const jibunLabel = block.jibun || (block.properties && block.properties.jibun) || '';
                 const content = `
                     <div style="padding:10px; background:white; border-radius:8px; border:1px solid #ddd; font-size:12px;">
-                        <div style="font-weight:bold; margin-bottom:5px;">${block.jibun}</div>
+                        <div style="font-weight:bold; margin-bottom:5px;">${jibunLabel}</div>
                         <div style="color:#2563EB;">✔ 영업 중: ${activeCount}곳</div>
                         <div style="color:#DC2626;">✖ 폐업 완료: ${closedCount}곳</div>
                         <div style="margin-top:5px; padding-top:5px; border-top:1px dashed #eee; font-size:11px; color:#666;">
@@ -932,6 +1307,44 @@ const AnalysisPage = () => {
       });
     }
   }, [showClosed]);
+
+  // 저장된 중심 좌표/반경이 있을 경우, 재진입 시 원과 마커를 다시 표시
+  useEffect(() => {
+    const { kakao } = window as any;
+    if (!kakao || !mapInstance.current) return;
+    if (!coords || radius === 0) return;
+
+    const center = new kakao.maps.LatLng(coords.lat, coords.lng);
+
+    // 중심 마커: 기존 것 제거 후 새로 생성 (기존 Kakao 객체 메서드 의존 최소화)
+    if (currentMarker.current) {
+      currentMarker.current.setMap(null);
+    }
+    currentMarker.current = new kakao.maps.Marker({
+      position: center,
+      map: mapInstance.current,
+      image: new kakao.maps.MarkerImage(
+        'https://t1.daumcdn.net/localimg/localimages/07/mapapidoc/marker_red.png',
+        new kakao.maps.Size(32, 34)
+      ),
+    });
+
+    // 분석 반경 원: 기존 것 제거 후 새로 생성 (setCenter 같은 미지원 메서드 사용 지양)
+    if (currentCircle.current) {
+      currentCircle.current.setMap(null);
+    }
+    currentCircle.current = new kakao.maps.Circle({
+      center,
+      radius,
+      strokeWeight: 2,
+      strokeColor: '#2563eb',
+      strokeOpacity: 0.8,
+      fillColor: '#3b82f6',
+      fillOpacity: 0.2,
+      map: mapInstance.current,
+    });
+  }, [coords, radius]);
+
   useEffect(() => {
     const { kakao } = window;
     if (kakao) kakao.maps.load(() => {});
@@ -969,6 +1382,7 @@ const AnalysisPage = () => {
         onStartAnalysis={handleStartAnalysis}
         onAutoSelect={handleAutoSelect}
         onLocationSelect={handleLocationSelect}
+        setSupportPrograms={setSupportPrograms}
       />
       
 
@@ -983,6 +1397,7 @@ const AnalysisPage = () => {
           isReportLoading={isReportLoading}
           supportPrograms={supportPrograms}
           isSupportLoading={isSupportLoading}
+          setSupportPrograms={setSupportPrograms}
         />
         <MapControls
           showLandPrice={showLandPrice}
