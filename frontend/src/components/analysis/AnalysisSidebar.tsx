@@ -1,5 +1,6 @@
 import React, { useState } from 'react'; // useState 추가
 import { MapPin, Search, Loader2 } from 'lucide-react'; // Navigation 아이콘 추가
+import { API_BASE_URL } from '../../config/apiBase';
 interface AnalysisSidebarProps {
   address: string;
   radius: number;
@@ -31,7 +32,7 @@ const AnalysisSidebar: React.FC<AnalysisSidebarProps> = (p) => {
     if (!searchQuery.trim()) return;
     setIsSearching(true);
     try {
-      const res = await fetch(`https://sbc365.co.kr/api/categories/search?query=${encodeURIComponent(searchQuery)}`);
+      const res = await fetch(`${API_BASE_URL}/categories/search?query=${encodeURIComponent(searchQuery)}`);
       const data = await res.json();
       
       if (data && data.hierarchy) {

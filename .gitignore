@@ -15,6 +15,13 @@ backend/logs/
 backend/*.log
 backend/npm-debug.log*
 
+# --- Docker / prod secrets (루트) ---
+.env.production
+
+# --- Python (hwpx_analysis scripts) ---
+__pycache__/
+*.py[cod]
+
 # --- OS & IDE ---
 .DS_Store
 .idea/

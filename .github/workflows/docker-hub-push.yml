@@ -1,0 +1,66 @@
+# Docker Hub에 kimminjae0515/backend-app, frontend-app 푸시 (linux/amd64)
+#
+# GitHub → Settings → Secrets:
+#   DOCKERHUB_USERNAME
+#   DOCKERHUB_TOKEN   (Hub → Account Settings → Security → Access Token)
+# GitHub → Variables:
+#   VITE_API_BASE_URL  (예: https://sbc365.co.kr/api)
+# 선택 Variables:
+#   DOCKER_USER (기본 kimminjae0515)
+
+name: Push to Docker Hub
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+env:
+  DOCKER_USER: ${{ vars.DOCKER_USER || 'kimminjae0515' }}
+  TAG_SUFFIX: hard-attachment-mode-${{ github.sha }}-amd64
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push backend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.DOCKER_USER }}/backend-app:latest
+            ${{ env.DOCKER_USER }}/backend-app:${{ env.TAG_SUFFIX }}
+
+      - name: Build and push frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            VITE_API_BASE_URL=${{ vars.VITE_API_BASE_URL || 'https://sbc365.co.kr/api' }}
+          tags: |
+            ${{ env.DOCKER_USER }}/frontend-app:latest
+            ${{ env.DOCKER_USER }}/frontend-app:${{ env.TAG_SUFFIX }}

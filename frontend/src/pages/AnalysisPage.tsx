@@ -5,8 +5,8 @@ import MapControls from '../components/analysis/MapControls';
 import AnalysisDashboard from '../components/analysis/AnalysisDashboard';
 import type {SupportProgram}  from '../components/analysis/SupportPrograms';
 import { useAnalysisStore } from '../store/useAnalysisStore';
+import { API_BASE_URL } from '../config/apiBase';
 
-const API_BASE_URL = "https://sbc365.co.kr/api";
 const calculateBBox = (lat: number, lng: number, r: number) => {
   const latDegree = r / 111000;
   const lngDegree = r / (111000 * Math.cos(lat * Math.PI / 180));

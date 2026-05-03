@@ -106,11 +106,31 @@ function resolveCellTextForKind(kind, value, loc) {
 }
 
 /**
+ * schema_version 2 (HWPX 절대 격자 좌표).
+ */
+function validateLocationV2(loc, format) {
+    if (format !== 'hwpx') return false;
+    const sp = loc.section_path;
+    if (typeof sp !== 'string' || !sp.trim()) return false;
+    const ti = loc.table_index;
+    if (!Number.isInteger(ti) || ti < 0) return false;
+    const ax = loc.absolute_x;
+    const ay = loc.absolute_y;
+    if (!Number.isInteger(ax) || ax < 0) return false;
+    if (!Number.isInteger(ay) || ay < 0) return false;
+    return true;
+}
+
+/**
  * finalize 적용용 location_json 이 최소 기하 정보를 갖추었는지 검사.
  * 잘못된 기본값(0,1)으로 잘못된 셀에 쓰는 것을 방지한다.
  */
 function validateLocationForApply(loc, format) {
     if (!loc || typeof loc !== 'object') return false;
+    const sv = Number(loc.schema_version);
+    if (sv === 2) {
+        return validateLocationV2(loc, format);
+    }
     const ti = loc.table_index;
     const ri = loc.row_index;
     const vc = loc.value_col;
@@ -158,7 +178,13 @@ function buildApplyPayload(rows, format, opts = {}) {
             kind: r.kind || loc.kind || 'table_label',
             value: cellText,
         };
-        if (format === 'hwpx') {
+        if (Number(loc.schema_version) === 2) {
+            base.schema_version = 2;
+            base.absolute_x = loc.absolute_x;
+            base.absolute_y = loc.absolute_y;
+            base.apply_strategy = loc.apply_strategy || 'coord';
+            base.section_path = loc.section_path;
+        } else if (format === 'hwpx') {
             base.section_path = loc.section_path;
         } else {
             base.section_index = loc.section_index;
@@ -179,4 +205,5 @@ module.exports = {
     resolveCellTextForKind,
     FORBIDDEN_KIND,
     validateLocationForApply,
+    validateLocationV2,
 };

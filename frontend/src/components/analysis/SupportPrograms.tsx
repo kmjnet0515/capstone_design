@@ -2,8 +2,7 @@ import React, { useRef, useState } from 'react';
 import { ExternalLink, Calendar, Gift, FileText, Download, Bot, Sparkles, PenLine } from 'lucide-react';
 import axios from 'axios';
 import ApplicationChatPanel from './ApplicationChatPanel';
-
-const API_BASE_URL = "https://sbc365.co.kr/api";
+import { API_BASE_URL } from '../../config/apiBase';
 
 export interface SupportProgram {
   id: string;

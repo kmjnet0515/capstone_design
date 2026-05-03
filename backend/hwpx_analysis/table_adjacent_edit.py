@@ -123,6 +123,78 @@ def _tc_children(tr: ET.Element) -> list[ET.Element]:
     return [c for c in tr if _local_name(c.tag) == "tc"]
 
 
+def _parse_span_int(el: ET.Element, *keys: str, default: int = 1) -> int:
+    for k in keys:
+        v = el.get(k)
+        if v is not None and str(v).strip():
+            try:
+                return max(1, int(v))
+            except ValueError:
+                continue
+    for ak, av in el.attrib.items():
+        ln = ak.split("}", 1)[-1] if ak.startswith("{") else ak
+        for kk in keys:
+            if ln.lower() == kk.lower():
+                try:
+                    return max(1, int(av))
+                except ValueError:
+                    continue
+    return default
+
+
+def find_anchor_tc_at(tbl: ET.Element, abs_x: int, abs_y: int) -> ET.Element | None:
+    """논리 격자 좌표에 대응하는 앵커 ``tc`` (grid_absolute 와 동일 알고리즘)."""
+    rows_el = _tr_children(tbl)
+    if not rows_el:
+        return None
+    slot: list[list[Any]] = []
+
+    def ensure_cell(r: int, c: int) -> None:
+        while len(slot) <= r:
+            slot.append([])
+        row = slot[r]
+        while len(row) <= c:
+            row.append(None)
+
+    for ri, tr in enumerate(rows_el):
+        ensure_cell(ri, 0)
+        tcs = _tc_children(tr)
+        ci = 0
+        for tc in tcs:
+            while True:
+                ensure_cell(ri, ci)
+                if slot[ri][ci] is None:
+                    break
+                ci += 1
+            col_span = _parse_span_int(tc, "colSpan", "colspan", "gridSpan", default=1)
+            row_span = _parse_span_int(tc, "rowSpan", "rowspan", default=1)
+            for dy in range(row_span):
+                for dx in range(col_span):
+                    r, c = ri + dy, ci + dx
+                    ensure_cell(r, c)
+                    if slot[r][c] is not None:
+                        continue
+                    if dy == 0 and dx == 0:
+                        slot[r][c] = {"kind": "anchor", "tc": tc}
+                    else:
+                        slot[r][c] = {"kind": "cover", "anchor_y": ri, "anchor_x": ci}
+            ci += col_span
+
+    if abs_y < 0 or abs_y >= len(slot):
+        return None
+    row = slot[abs_y]
+    if abs_x < 0 or abs_x >= len(row):
+        return None
+    cell = row[abs_x]
+    if cell is None:
+        return None
+    if cell["kind"] == "anchor":
+        return cell["tc"]
+    ay, ax = cell["anchor_y"], cell["anchor_x"]
+    anchor = slot[ay][ax]
+    return anchor.get("tc") if anchor and anchor.get("kind") == "anchor" else None
+
+
 def patch_section_xml_table_label(
     xml_bytes: bytes,
     *,
@@ -154,6 +226,36 @@ def patch_section_xml_table_label(
         ET.ElementTree(root).write(buf, encoding="UTF-8", xml_declaration=True)
         return buf.getvalue(), meta
     raise ValueError(f"라벨 {_normalize_label_compare(label_ref)!r} 행 없음")
+
+
+def patch_section_xml_table_absolute(
+    xml_bytes: bytes,
+    *,
+    table_index: int,
+    absolute_x: int,
+    absolute_y: int,
+    new_value: str,
+) -> tuple[bytes, dict[str, Any]]:
+    """절대 격자 좌표로 값 셀(tc)을 찾아 텍스트 갱신."""
+    root = ET.fromstring(xml_bytes)
+    tbls = list(_iter_tbl_depth_first(root))
+    if table_index >= len(tbls):
+        raise ValueError(f"table_index={table_index} 초과 (표 {len(tbls)}개)")
+    tbl = tbls[table_index]
+    tc = find_anchor_tc_at(tbl, absolute_x, absolute_y)
+    if tc is None:
+        raise ValueError(
+            f"절대좌표 ({absolute_x},{absolute_y}) 에 해당하는 tc 없음"
+        )
+    n = _set_tc_plain_text(tc, new_value)
+    buf = io.BytesIO()
+    ET.ElementTree(root).write(buf, encoding="UTF-8", xml_declaration=True)
+    return buf.getvalue(), {
+        "matched": "absolute",
+        "abs_x": absolute_x,
+        "abs_y": absolute_y,
+        "t_nodes_touched": n,
+    }
 
 
 def patch_section_xml_table_at(
@@ -249,6 +351,78 @@ def edit_hwpx_table_value_at_position(
         "dest": hwpx_out,
         "per_section": per_file,
         "repackage": rp,
+    }
+
+
+def edit_hwpx_table_value_absolute(
+    hwpx_in: str,
+    hwpx_out: str,
+    *,
+    section_path: str | None = None,
+    table_index: int = 0,
+    absolute_x: int,
+    absolute_y: int,
+    new_value: str,
+) -> dict[str, Any]:
+    """절대 격자 좌표로 값 셀 편집 (schema_version 2)."""
+    hwpx_in = os.path.abspath(hwpx_in)
+    hwpx_out = os.path.abspath(hwpx_out)
+    if not zipfile.is_zipfile(hwpx_in):
+        return {"ok": False, "error": "ZIP 아님"}
+
+    overrides: dict[str, bytes] = {}
+    per_file: dict[str, Any] = {}
+    touched = False
+
+    with zipfile.ZipFile(hwpx_in, "r") as zf:
+        names = zf.namelist()
+        sections = discover_section_members(names)
+
+    resolved = resolve_section_member(section_path, sections) if section_path else None
+    if section_path and resolved is None:
+        return {
+            "ok": False,
+            "error": f"section_path 없음: {section_path}",
+            "sections_found": sections[:12],
+        }
+    targets = [resolved] if resolved else sections
+
+    for sec in targets:
+        with zipfile.ZipFile(hwpx_in, "r") as zf:
+            raw = zf.read(sec)
+        try:
+            new_xml, meta = patch_section_xml_table_absolute(
+                raw,
+                table_index=table_index,
+                absolute_x=absolute_x,
+                absolute_y=absolute_y,
+                new_value=new_value,
+            )
+        except ValueError as e:
+            per_file[sec] = {"ok": False, "error": str(e)}
+            continue
+        overrides[sec] = new_xml
+        per_file[sec] = {"ok": True, **meta}
+        touched = True
+        break
+
+    if not touched:
+        return {
+            "ok": False,
+            "error": "절대좌표 셀을 찾지 못함",
+            "per_section": per_file,
+        }
+
+    rp = repackage_with_overrides(hwpx_in, hwpx_out, overrides)
+    if not rp.get("ok"):
+        return rp
+    return {
+        "ok": True,
+        "src": hwpx_in,
+        "dest": hwpx_out,
+        "per_section": per_file,
+        "repackage": rp,
+        "apply_strategy": "coord",
     }
 
 

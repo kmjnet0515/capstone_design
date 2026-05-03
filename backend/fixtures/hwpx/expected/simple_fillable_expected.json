@@ -1,0 +1,15 @@
+{
+  "ok": true,
+  "fields": [
+    {
+      "label_text": "이름",
+      "value_col": 1,
+      "row_index": 0
+    },
+    {
+      "label_text": "연락처",
+      "value_col": 1,
+      "row_index": 1
+    }
+  ]
+}

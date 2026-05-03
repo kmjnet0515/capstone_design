@@ -26,8 +26,7 @@ import {
   SkipForward,
   RotateCcw,
 } from 'lucide-react';
-
-const API_BASE_URL = "https://sbc365.co.kr/api";
+import { API_BASE_URL } from '../../config/apiBase';
 
 type FieldKind =
   | 'text' | 'longtext' | 'number' | 'date' | 'phone' | 'email'

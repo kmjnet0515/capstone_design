@@ -112,6 +112,34 @@ async function extractTableGrids(filePath, { timeoutMs } = {}) {
  * @param {Array<object>} fields  [{section_index|section_path, table_index, label_col, value_col, label_text, value}]
  * @param {string} outPath  결과 파일
  */
+/**
+ * HWPX: 그리드 + 블록 토폴로지 (--extract-blocks). HWPX 전용.
+ */
+async function extractDocumentTopology(filePath, { timeoutMs } = {}) {
+    const format = detectFormat(filePath);
+    if (format !== 'hwpx') {
+        return { ok: false, error: 'extractDocumentTopology 는 .hwpx 만 지원합니다.', format };
+    }
+    const args = ['-m', 'hwpx_analysis', filePath, '--extract-blocks'];
+    let parsed;
+    try {
+        const { stdout, stderr } = await _runPython(args, { timeoutMs });
+        try {
+            parsed = JSON.parse(stdout);
+        } catch (e) {
+            return {
+                ok: false,
+                error: `JSON 파싱 실패: ${e.message}`,
+                raw: stdout.slice(0, 500),
+                stderr: (stderr || '').slice(0, 1200),
+            };
+        }
+    } catch (e) {
+        return { ok: false, error: e.message || String(e) };
+    }
+    return parsed;
+}
+
 async function applyFields(srcPath, fields, outPath, { timeoutMs = 120_000 } = {}) {
     const format = detectFormat(srcPath);
     if (!format) return { ok: false, error: `지원 안 되는 확장자: ${srcPath}` };
@@ -148,6 +176,7 @@ module.exports = {
     detectFormat,
     listFillableCells,
     extractTableGrids,
+    extractDocumentTopology,
     applyFields,
     PYTHON_PATH,
 };

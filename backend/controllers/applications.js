@@ -24,6 +24,7 @@ const bridge = require('../services/hwp_bridge');
 const { normalizeFields, buildApplyPayload, validateLocationForApply } = require('../services/field_extractor');
 const {
     classifyFields,
+    classifyBlockTopology,
     rehydrateClassificationWithGrids,
     reconcileClassificationWithFillable,
 } = require('../services/field_classifier');
@@ -33,7 +34,7 @@ const { analysisQueue } = require('../services/analysis_queue');
 const FILLED_TTL_MIN = parseInt(process.env.APPLICATION_FILLED_TTL_MIN || '15', 10);
 
 /** 그리드 추출·위치 검증·캐시 스키마 변경 시 1씩 올려 기존 캐시 무효화 */
-const APPLICATION_ANALYSIS_REVISION = 3;
+const APPLICATION_ANALYSIS_REVISION = 4;
 
 const PROGRESS = {
     QUEUED:        { stage: 'queued',           percent: 5 },
@@ -515,9 +516,11 @@ async function _runPrepareFromAttachment(pool, sessionId, { url, fileName }) {
             [fileHash, sessionId]
         );
 
+        const useBlockPipeline = process.env.USE_BLOCK_PIPELINE === '1' && safeExt === 'hwpx';
+
         const cached = await documentCache.getCached(pool, fileHash).catch(() => null);
         let analyzed;
-        if (cached && cached.classification && Array.isArray(cached.classification.fields)
+        if (!useBlockPipeline && cached && cached.classification && Array.isArray(cached.classification.fields)
             && cached.classification.analysis_revision === APPLICATION_ANALYSIS_REVISION) {
             await _setProgress(pool, sessionId, PROGRESS.CACHE_HIT);
             const clsHydrated = rehydrateClassificationWithGrids(cached.grids, cached.classification);
@@ -532,6 +535,31 @@ async function _runPrepareFromAttachment(pool, sessionId, { url, fileName }) {
                 confidence: cached.confidence,
                 via: 'cache',
                 cache: { hit_count: cached.hit_count, expires_at: cached.expires_at },
+            };
+        } else if (useBlockPipeline) {
+            await _setProgress(pool, sessionId, PROGRESS.EXTRACTING);
+            const topoPayload = await bridge.extractDocumentTopology(localPath, { timeoutMs: 90_000 });
+            if (!topoPayload.ok) throw new Error(`토폴로지 추출 실패: ${topoPayload.error || 'unknown'}`);
+            const grids = topoPayload.grids;
+            if (!grids || !grids.ok) throw new Error(`grids 포함 실패: ${grids && grids.error}`);
+
+            await _setProgress(pool, sessionId, PROGRESS.CLASSIFYING);
+            const cls = await classifyBlockTopology(topoPayload, openaiOf(pool), { model: 'gpt-4o-mini', maxRetries: 1 });
+            if (!cls.ok) throw new Error(`블록 LLM 분류 실패: ${cls.error}`);
+
+            documentCache.putCache(pool, {
+                hash: fileHash, format: safeExt, size: fileSize,
+                grids,
+                classification: { ...cls, analysis_revision: APPLICATION_ANALYSIS_REVISION },
+            }).catch(() => {});
+
+            const rows = _classificationToRows(cls, safeExt);
+            analyzed = {
+                ok: true, rows,
+                document_kind: cls.document_kind,
+                confidence: cls.confidence,
+                via: 'block_llm',
+                usage: cls.usage,
             };
         } else {
             // 3) 그리드 추출
@@ -658,6 +686,9 @@ function _classificationToRows(cls, format) {
     const filtered = (cls.fields || []).filter((f) => {
         const it = String(f.input_type || '').toLowerCase();
         if (!SAFE_INPUT_TYPES.has(it) && !MANUAL_ONLY_TYPES.has(it)) return false;
+        if (f.schema_version === 2 || (fmt === 'hwpx' && Number.isInteger(f.absolute_x) && Number.isInteger(f.absolute_y))) {
+            return Number.isInteger(f.table_index) && typeof f.section_path === 'string' && f.section_path.trim();
+        }
         if (!Number.isInteger(f.row_index) || !Number.isInteger(f.col_index) || !Number.isInteger(f.table_index)) {
             return false;
         }
@@ -673,22 +704,41 @@ function _classificationToRows(cls, format) {
             ? f._doc_label_text.trim()
             : null;
         const gridLabelCol = Number.isInteger(f._grid_label_col) ? f._grid_label_col : null;
-        const location = {
-            section_index: f.section_index != null ? f.section_index : (fmt === 'hwp' ? 0 : null),
-            section_path: f.section_path ?? null,
-            table_index: f.table_index,
-            row_index: f.row_index,
-            label_col: gridLabelCol != null ? gridLabelCol : (f.col_index > 0 ? f.col_index - 1 : 0),
-            value_col: f.col_index,
-            label_text: docLab || f.prompt_label,
-            composed_label: f.context ? `${f.context} / ${f.prompt_label}` : null,
-            input_type: it,
-            options: f.options || null,
-            manual_only: isManual || null,
-            value_para_text_seqno: meta.first_pt ?? null,
-            value_para_header_seqno: meta.first_para_hdr ?? null,
-            needs_inject: (meta.first_pt == null && meta.first_para_hdr != null) || (meta.has_t === false) || null,
-        };
+
+        let location;
+        if (f.schema_version === 2 || (fmt === 'hwpx' && Number.isInteger(f.absolute_x))) {
+            location = {
+                schema_version: 2,
+                section_path: f.section_path,
+                table_index: f.table_index,
+                absolute_x: f.absolute_x,
+                absolute_y: f.absolute_y,
+                label_text: f.label_text || docLab || f.prompt_label,
+                composed_label: f.context ? `${f.context} / ${f.prompt_label}` : null,
+                input_type: it,
+                options: f.options || null,
+                manual_only: isManual || null,
+                block_id: f.block_id ?? null,
+                apply_strategy: 'coord',
+            };
+        } else {
+            location = {
+                section_index: f.section_index != null ? f.section_index : (fmt === 'hwp' ? 0 : null),
+                section_path: f.section_path ?? null,
+                table_index: f.table_index,
+                row_index: f.row_index,
+                label_col: gridLabelCol != null ? gridLabelCol : (f.col_index > 0 ? f.col_index - 1 : 0),
+                value_col: f.col_index,
+                label_text: docLab || f.prompt_label,
+                composed_label: f.context ? `${f.context} / ${f.prompt_label}` : null,
+                input_type: it,
+                options: f.options || null,
+                manual_only: isManual || null,
+                value_para_text_seqno: meta.first_pt ?? null,
+                value_para_header_seqno: meta.first_para_hdr ?? null,
+                needs_inject: (meta.first_pt == null && meta.first_para_hdr != null) || (meta.has_t === false) || null,
+            };
+        }
         if (!isManual && !validateLocationForApply(location, fmt)) {
             console.warn('[applications] 분류 필드 제외(위치 정보 불완전):', f.prompt_label, location);
             continue;

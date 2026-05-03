@@ -342,9 +342,126 @@ function reconcileClassificationWithFillable(cls, fillable) {
     return { ...cls, fields };
 }
 
+const SYSTEM_PROMPT_BLOCKS = `너는 한국 정부·소상공인 신청서 표의 «입력 슬롯»만 분류한다.
+각 슬롯은 이미 좌표가 고정되어 있다. 절대 row/col 좌표를 새로 추측하거나 출력하지 마라.
+
+규칙:
+1) document_kind: application | notice | mixed
+2) classifications[] 각 항목은 반드시 입력으로 준 slot_id 를 그대로 사용한다.
+3) input_type: text, longtext, number, date, phone, email, biz_no, checkbox, radio, signature
+4) checkbox/radio 일 때만 options 배열
+5) 출력 JSON 에서 abs_table_index, row_index, col_index, absolute_x, absolute_y 등 좌표 필드는 넣지 마라.
+
+출력 형식:
+{"document_kind":"...","confidence":0.0,"reason":"...","classifications":[{"slot_id":"...","input_type":"...","prompt_label":"...","options":null,"placeholder_hint":null}]}`;
+
+/**
+ * Phase 3: 블록 토폴로지(--extract-blocks) 기반 의미만 분류. 좌표는 슬롯에 포함된 값만 사용.
+ *
+ * @param {object} topoPayload { ok, topology:{ blocks[] }, grids? }
+ */
+async function classifyBlockTopology(topoPayload, openai, opts = {}) {
+    const model = opts.model || 'gpt-4o-mini';
+    const temperature = opts.temperature ?? 0;
+    const maxRetries = opts.maxRetries ?? 1;
+
+    const topo = topoPayload?.topology;
+    if (!topo || !topo.ok) {
+        return { ok: false, error: 'topology 없음 또는 실패', detail: topo };
+    }
+    const blocks = topo.blocks || [];
+    const slotList = [];
+    for (const b of blocks) {
+        const items = b.items || [];
+        items.forEach((it, j) => {
+            slotList.push({
+                slot_id: `${b.block_id}:${j}`,
+                block_id: b.block_id,
+                section_path: b.section_path,
+                table_index: b.table_index,
+                label: it.label,
+                abs_x: it.abs_x,
+                abs_y: it.abs_y,
+            });
+        });
+    }
+    if (slotList.length === 0) {
+        return { ok: true, document_kind: 'unknown', confidence: 0, fields: [], reason: 'no_slots', model };
+    }
+
+    let lastErr = null;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+            const res = await openai.chat.completions.create({
+                model,
+                temperature,
+                response_format: { type: 'json_object' },
+                messages: [
+                    { role: 'system', content: SYSTEM_PROMPT_BLOCKS },
+                    {
+                        role: 'user',
+                        content:
+                            '다음 slots JSON 만 분류해라. 좌표 필드는 출력하지 마라.\n```json\n'
+                            + JSON.stringify({ slots: slotList })
+                            + '\n```',
+                    },
+                ],
+            });
+            const content = res.choices?.[0]?.message?.content || '{}';
+            const parsed = JSON.parse(content);
+            const rawCls = Array.isArray(parsed.classifications) ? parsed.classifications : [];
+
+            const byId = new Map(slotList.map((s) => [s.slot_id, s]));
+            const fields = [];
+            for (const c of rawCls) {
+                const sid = c.slot_id;
+                if (!sid || !byId.has(sid)) continue;
+                const slot = byId.get(sid);
+                fields.push({
+                    schema_version: 2,
+                    section_path: slot.section_path,
+                    table_index: slot.table_index,
+                    absolute_x: slot.abs_x,
+                    absolute_y: slot.abs_y,
+                    row_index: slot.abs_y,
+                    col_index: slot.abs_x,
+                    prompt_label: c.prompt_label || slot.label,
+                    label_text: slot.label,
+                    input_type: c.input_type || 'text',
+                    options: c.options || null,
+                    placeholder_hint: c.placeholder_hint || null,
+                    block_id: slot.block_id,
+                    slot_id: sid,
+                    context: null,
+                    abs_table_index: null,
+                });
+            }
+
+            return {
+                ok: true,
+                document_kind: parsed.document_kind || 'unknown',
+                confidence: parsed.confidence ?? 0,
+                reason: parsed.reason || '',
+                fields,
+                model,
+                usage: res.usage || null,
+                pipeline: 'block_topology_v2',
+            };
+        } catch (e) {
+            lastErr = e;
+            if (attempt < maxRetries) {
+                await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+            }
+        }
+    }
+    return { ok: false, error: lastErr ? lastErr.message : 'unknown' };
+}
+
 module.exports = {
     classifyFields,
+    classifyBlockTopology,
     SYSTEM_PROMPT,
+    SYSTEM_PROMPT_BLOCKS,
     rehydrateClassificationWithGrids,
     reconcileClassificationWithFillable,
 };

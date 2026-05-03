@@ -13,6 +13,7 @@ import zipfile
 from typing import Any
 
 from .opc_manifest import discover_section_members
+from .grid_absolute import attach_absolute_grids_to_tables
 from .table_adjacent_edit import (
     _local_name,
     _tc_plain_text,
@@ -78,6 +79,11 @@ def extract_table_grids_in_hwpx(hwpx_path: str) -> dict[str, Any]:
             for sp in sections:
                 xml_bytes = zf.read(sp)
                 tables = _extract_section_grids(xml_bytes, sp)
+                try:
+                    attach_absolute_grids_to_tables(tables, xml_bytes)
+                except (ET.ParseError, ValueError):
+                    for t in tables:
+                        t.setdefault("absolute_grid", {"grid_confidence": "degraded", "error": "absolute_grid_failed"})
                 sections_out.append({
                     "section_path": sp,
                     "table_count": len(tables),

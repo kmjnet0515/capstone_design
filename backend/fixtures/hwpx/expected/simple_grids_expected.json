@@ -1,0 +1,40 @@
+{
+  "ok": true,
+  "format": "hwpx",
+  "sections": [
+    {
+      "tables": [
+        {
+          "table_index": 0,
+          "rows": [
+            [
+              "이름",
+              ""
+            ],
+            [
+              "연락처",
+              ""
+            ]
+          ],
+          "col_counts": [
+            2,
+            2
+          ],
+          "n_rows": 2,
+          "n_cols": 2,
+          "grid_confidence": "high",
+          "rows_text": [
+            [
+              "이름",
+              ""
+            ],
+            [
+              "연락처",
+              ""
+            ]
+          ]
+        }
+      ]
+    }
+  ]
+}

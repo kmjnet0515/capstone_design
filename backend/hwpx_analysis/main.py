@@ -13,10 +13,12 @@ from typing import Any
 from .edit_package import apply_text_replacements
 from .table_adjacent_edit import edit_hwpx_table_value_by_label
 from .table_adjacent_edit import edit_hwpx_table_value_at_position
+from .table_adjacent_edit import edit_hwpx_table_value_absolute
 from .engine import analyze_document
 from .package_zip import list_package_index
 from .list_fillable_cells import list_fillable_cells_in_hwpx
 from .extract_grids import extract_table_grids_in_hwpx
+from .block_topology import build_document_topology
 
 
 def _unpack(hwpx_path: str, out_dir: str) -> dict[str, Any]:
@@ -105,6 +107,11 @@ def main() -> None:
         help="표 그리드(셀 텍스트 + 위치 메타) JSON 출력. LLM 분류기 입력용.",
     )
     parser.add_argument(
+        "--extract-blocks",
+        action="store_true",
+        help="extract-grids + 블록/슬롯 토폴로지(JSON). 의미 분석 없음.",
+    )
+    parser.add_argument(
         "--apply-fields-json",
         metavar="PATH",
         help="JSON 파일의 fields[]를 순차 적용. 각 항목 형식: "
@@ -133,6 +140,13 @@ def main() -> None:
 
     if args.extract_grids:
         out = extract_table_grids_in_hwpx(args.hwpx_path)
+        print(json.dumps(out, ensure_ascii=False, indent=2, default=str))
+        return
+
+    if args.extract_blocks:
+        grids = extract_table_grids_in_hwpx(args.hwpx_path)
+        topo = build_document_topology(grids)
+        out = {"ok": grids.get("ok", False), "grids": grids, "topology": topo}
         print(json.dumps(out, ensure_ascii=False, indent=2, default=str))
         return
 
@@ -170,8 +184,30 @@ def main() -> None:
             vc = int(f.get("value_col", 1))
             lc = int(f.get("label_col", 0))
             lbl = str(f.get("label_text", ""))
+            abs_x = f.get("absolute_x")
+            abs_y = f.get("absolute_y")
 
-            if row_index is not None:
+            if abs_x is not None and abs_y is not None:
+                ed = edit_hwpx_table_value_absolute(
+                    cur_in,
+                    tmp_out,
+                    section_path=sec_path,
+                    table_index=ti,
+                    absolute_x=int(abs_x),
+                    absolute_y=int(abs_y),
+                    new_value=str(value),
+                )
+                if not ed.get("ok") and sec_path:
+                    ed = edit_hwpx_table_value_absolute(
+                        cur_in,
+                        tmp_out,
+                        section_path=None,
+                        table_index=ti,
+                        absolute_x=int(abs_x),
+                        absolute_y=int(abs_y),
+                        new_value=str(value),
+                    )
+            if not ed.get("ok") and row_index is not None:
                 ed = edit_hwpx_table_value_at_position(
                     cur_in,
                     tmp_out,
