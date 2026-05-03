@@ -1,5 +1,5 @@
 import React, { useState } from 'react'; // useState 추가
-import { MapPin, Search, Loader2, Navigation } from 'lucide-react'; // Navigation 아이콘 추가
+import { MapPin, Search, Loader2 } from 'lucide-react'; // Navigation 아이콘 추가
 interface AnalysisSidebarProps {
   address: string;
   radius: number;
@@ -31,7 +31,7 @@ const AnalysisSidebar: React.FC<AnalysisSidebarProps> = (p) => {
     if (!searchQuery.trim()) return;
     setIsSearching(true);
     try {
-      const res = await fetch(`http://localhost:3000/api/categories/search?query=${encodeURIComponent(searchQuery)}`);
+      const res = await fetch(`https://sbc365.co.kr/api/categories/search?query=${encodeURIComponent(searchQuery)}`);
       const data = await res.json();
       
       if (data && data.hierarchy) {
@@ -55,7 +55,8 @@ const AnalysisSidebar: React.FC<AnalysisSidebarProps> = (p) => {
     setIsLocSearching(true);
     
     const geocoder = new kakao.maps.services.Geocoder();
-    const ps = new kakao.maps.services.Places();
+    const services = kakao.maps.services as any;
+    const ps = new services.Places();
 
     // 1. 먼저 주소(행정구역) 검색을 시도합니다.
     geocoder.addressSearch(locQuery, (addrData: any, addrStatus: any) => {

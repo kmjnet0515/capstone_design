@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-const API_BASE_URL = "http://localhost:3000/api";
+const API_BASE_URL = "https://sbc365.co.kr/api";
 
 const RecommendationPage = () => {
   // 1. 스토어에서 데이터 가져오기 (비구조화 할당)

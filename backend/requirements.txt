@@ -1,0 +1,17 @@
+# 신청서 작성 에이전트 — Python 분석 모듈 의존성
+#
+# 설치:
+#   python3 -m venv venv
+#   ./venv/bin/pip install -U pip
+#   ./venv/bin/pip install -r requirements.txt
+#
+# pyhwp 는 Python 3.10 ~ 3.12 호환. 3.13 이상에선 일부 deprecation 경고가 있을 수 있으나 동작.
+
+pyhwp==0.1b15
+six==1.16.0
+olefile==0.47
+# PyPI compoundfiles 는 읽기 전용 — .hwp 재패킹에 writer 가 필요 (warlomak fork)
+compoundfiles @ git+https://github.com/warlomak/compoundfiles.git
+lxml==6.0.2
+cryptography==46.0.4
+PyMuPDF==1.26.7

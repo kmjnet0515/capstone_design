@@ -1,9 +1,17 @@
 export interface LatLng { getLat(): number; getLng(): number; }
+
 export interface KakaoMapInstance { 
   setCenter(latlng: LatLng): void; 
   panTo(latlng: LatLng): void; 
   relayout(): void; 
 }
+
+// Kakao Polygon에서 사용하는 최소 메서드 정의
+export interface KakaoPolygon {
+  setMap(map: KakaoMapInstance | null): void;
+  setOptions(options: any): void;
+}
+
 export interface KakaoMaps {
   LatLng: new (lat: number, lng: number) => LatLng;
   Map: new (container: HTMLElement, options: any) => KakaoMapInstance;
@@ -14,6 +22,7 @@ export interface KakaoMaps {
   Polyline: new (options: any) => { getLength(): number };
   InfoWindow: new (options: any) => any;
   CustomOverlay: new (options: any) => any;
+  Polygon: new (options: any) => KakaoPolygon;
   load: (callback: () => void) => void;
   event: { addListener(target: any, type: string, callback: (mouseEvent?: any) => void): void; };
   services: { Geocoder: new () => any; Status: { OK: string }; };

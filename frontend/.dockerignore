@@ -1,0 +1,10 @@
+node_modules
+npm-debug.log
+yarn.lock
+pnpm-lock.yaml
+
+dist
+build
+
+Dockerfile
+.dockerignore

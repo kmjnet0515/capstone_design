@@ -1,6 +1,5 @@
 import { useNavigate } from 'react-router-dom';
 import { Search, User, Map, BarChart3 } from 'lucide-react';
-import Login from './Login';
 
 const Header = () => {
   const navigate = useNavigate();

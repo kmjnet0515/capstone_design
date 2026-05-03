@@ -14,18 +14,12 @@ interface AnalysisDashboardProps {
   isReportLoading: boolean;
   supportPrograms: SupportProgram[];
   isSupportLoading: boolean;
-  setSupportPrograms: React.Dispatch<React.SetStateAction<SupportProgram[]>>;
 }
 
 const AnalysisDashboard: React.FC<AnalysisDashboardProps> = ({ 
-  isOpen, onClose, address, radius, aiReport, isReportLoading, supportPrograms, isSupportLoading, setSupportPrograms
+  isOpen, onClose, address, radius, aiReport, isReportLoading, supportPrograms, isSupportLoading
 }) => {
   if (!isOpen) return null;
-  const handleSummaryUpdate = (id: string, newSummary: string) => {
-    setSupportPrograms(prev => 
-      prev.map(prog => prog.id === id ? { ...prog, summary: newSummary } : prog)
-    );
-  };
 
   // ====== 전역 분석 데이터 가져오기 ======
   const landPrices = useAnalysisStore((s) => s.landPrices);
@@ -37,7 +31,6 @@ const AnalysisDashboard: React.FC<AnalysisDashboardProps> = ({
   const coords = useAnalysisStore((s) => s.coords);
 
   // 안전 가드
-  const hasBaseData = landPrices && landPrices.length > 0 && radius > 0;
 
   // ====== 1. 공시지가 인사이트 (입지 레벨 / 핵심 vs 주변) ======
   const landStats = useMemo(() => {
@@ -264,9 +257,8 @@ const AnalysisDashboard: React.FC<AnalysisDashboardProps> = ({
           )}
         </section>
         <SupportPrograms 
-            programs={supportPrograms} 
-            isLoading={isSupportLoading} 
-            onSummaryUpdate={handleSummaryUpdate}
+          programs={supportPrograms} 
+          isLoading={isSupportLoading} 
         />
         {/* 1. 공시지가 – 입지 레벨 / 핵심축 vs 주변부 */}
         <section>

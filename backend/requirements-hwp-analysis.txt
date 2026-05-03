@@ -1,0 +1,6 @@
+# HWP 분석/재패킹용 (backend venv 에 추가 설치)
+olefile>=0.46
+# ole 복합문서 쓰기 — PyPI 기본 compoundfiles 는 읽기 전용이라 fork 필요
+compoundfiles @ git+https://github.com/warlomak/compoundfiles.git
+# 레코드 파싱·의미층 (기존과 동일)
+pyhwp

@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
-import { ExternalLink, Calendar, Gift, FileText, Download, Bot, Sparkles } from 'lucide-react';
+import React, { useRef, useState } from 'react';
+import { ExternalLink, Calendar, Gift, FileText, Download, Bot, Sparkles, PenLine } from 'lucide-react';
 import axios from 'axios';
+import ApplicationChatPanel from './ApplicationChatPanel';
 
-const API_BASE_URL = "http://localhost:3000/api";
+const API_BASE_URL = "https://sbc365.co.kr/api";
 
 export interface SupportProgram {
   id: string;
@@ -20,14 +21,85 @@ export interface SupportProgram {
 interface SupportProgramsProps {
   programs: SupportProgram[];
   isLoading: boolean;
-  onSummaryUpdate?: (id: string, newSummary: string) => void; 
 }
 
-const SupportPrograms: React.FC<SupportProgramsProps> = ({ programs, isLoading, onSummaryUpdate }) => {
+interface AttachmentCheck {
+  loading: boolean;
+  hasEligible: boolean;
+}
+
+/**
+ * 신청서 작성 버튼을 보여줄지 판정.
+ * - fileUrl/fileName 으로 .hwp/.hwpx 가 명확하면 노출
+ * - 그 외에도 공고 URL 이 있으면 노출 (백엔드 크롤러가 실제 첨부파일을 판단)
+ *   -> 카드에 연결된 대표 fileUrl 이 pdf/이미지여도, 상세 페이지에 신청서식 hwpx/hwp가 있는 경우를 커버
+ */
+function canApplyHwp(program: SupportProgram, check?: AttachmentCheck): boolean {
+  if (!program.url && !program.fileUrl) return false;
+  const candidate = (program.fileName || program.fileUrl || '').toLowerCase();
+  if (candidate) {
+    const m = candidate.match(/\.(hwpx?|pdf|docx?|xlsx?|zip|png|jpe?g)(\?|$)/);
+    if (m) {
+      const ext = m[1];
+      if (ext === 'hwp' || ext === 'hwpx') return true;
+      // 카드의 대표 첨부가 비-HWP 인 경우에는 실제 첨부목록 확인 결과를 따른다.
+      return !!check?.hasEligible;
+    }
+    // 확장자 추출 실패: 확인 결과 기반
+    return !!check?.hasEligible;
+  }
+  // 파일 정보 없음: 공고 URL 기반 확인 결과 사용
+  return !!check?.hasEligible;
+}
+
+const SupportPrograms: React.FC<SupportProgramsProps> = ({ programs, isLoading }) => {
   const [analyzingIds, setAnalyzingIds] = useState<Set<string>>(new Set());
+  const [attachmentChecks, setAttachmentChecks] = useState<Record<string, AttachmentCheck>>({});
+  const checkedProgramIdsRef = useRef<Set<string>>(new Set());
   
   // 핵심: 각 프로그램 ID별로 생성된 AI 요약을 따로 저장하는 객체
   const [aiSummaries, setAiSummaries] = useState<Record<string, string>>({});
+
+  // 신청서 작성 패널이 열린 program id
+  const [applyOpenIds, setApplyOpenIds] = useState<Set<string>>(new Set());
+
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const targets = programs.filter((p) => !!p.url);
+      for (const p of targets) {
+        if (checkedProgramIdsRef.current.has(p.id)) continue;
+        checkedProgramIdsRef.current.add(p.id);
+        setAttachmentChecks((prev) => ({ ...prev, [p.id]: { loading: true, hasEligible: false } }));
+        try {
+          const r = await axios.get(`${API_BASE_URL}/applications/check-attachments`, {
+            params: { programUrl: p.url },
+          });
+          if (cancelled) return;
+          setAttachmentChecks((prev) => ({
+            ...prev,
+            [p.id]: { loading: false, hasEligible: !!(r.data?.hasEligible ?? r.data?.hasSupported) },
+          }));
+        } catch {
+          if (cancelled) return;
+          setAttachmentChecks((prev) => ({
+            ...prev,
+            [p.id]: { loading: false, hasEligible: false },
+          }));
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [programs]);
+
+  const toggleApplyPanel = (id: string) => {
+    setApplyOpenIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   const handleSummarize = async (program: SupportProgram) => {
     if (!program.fileUrl) {
@@ -175,6 +247,29 @@ const SupportPrograms: React.FC<SupportProgramsProps> = ({ programs, isLoading, 
                     </a>
                   )}
                 </div>
+
+                {canApplyHwp(program, attachmentChecks[program.id]) && (
+                  <button
+                    onClick={() => toggleApplyPanel(program.id)}
+                    className="mt-3 w-full py-2.5 bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-100 rounded-xl flex items-center justify-center gap-2 hover:from-emerald-100 hover:to-teal-100 transition-all"
+                  >
+                    <PenLine size={14} className="text-emerald-600" />
+                    <span className="text-xs font-bold text-emerald-700">
+                      {applyOpenIds.has(program.id) ? '신청서 작성 닫기' : '신청서 작성하기'}
+                    </span>
+                  </button>
+                )}
+
+                {applyOpenIds.has(program.id) && (
+                  <ApplicationChatPanel
+                    programId={program.id}
+                    programTitle={program.title}
+                    programUrl={program.url}
+                    fileUrl={program.fileUrl}
+                    fileName={program.fileName}
+                    onClose={() => toggleApplyPanel(program.id)}
+                  />
+                )}
               </div>
             );
           })

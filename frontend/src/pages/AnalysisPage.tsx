@@ -6,7 +6,7 @@ import AnalysisDashboard from '../components/analysis/AnalysisDashboard';
 import type {SupportProgram}  from '../components/analysis/SupportPrograms';
 import { useAnalysisStore } from '../store/useAnalysisStore';
 
-const API_BASE_URL = "http://localhost:3000/api";
+const API_BASE_URL = "https://sbc365.co.kr/api";
 const calculateBBox = (lat: number, lng: number, r: number) => {
   const latDegree = r / 111000;
   const lngDegree = r / (111000 * Math.cos(lat * Math.PI / 180));
@@ -15,8 +15,6 @@ const calculateBBox = (lat: number, lng: number, r: number) => {
 
 
 const AnalysisPage = () => {
-  const usingAIReport = useState(false);
-
 
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<any>(null);
@@ -56,9 +54,7 @@ const AnalysisPage = () => {
   const supportPrograms = useAnalysisStore((state) => state.supportPrograms) as SupportProgram[];
   const [isReportLoading, setIsReportLoading] = useState(false);
   const [showClosed, setShowClosed] = useState(true); // 폐업 마커 표시 여부
-  const [regionCode, setRegionCode] = useState("");
   const [isSupportLoading, setIsSupportLoading] = useState(false);
-  const [isLoadingClosed, setIsLoadingClosed] = useState(false); // 로딩 상태 추가
   const setAnalysisResult = useAnalysisStore((state) => state.setAnalysisResult);
   const locationConsent = useAnalysisStore((state) => state.locationConsent);
   const setLocationConsent = useAnalysisStore((state) => state.setLocationConsent);
@@ -395,6 +391,7 @@ const AnalysisPage = () => {
 
   // 시작
   const handleStartAnalysis = async () => {
+    const { kakao } = window;
     // 필수 데이터 체크
     if (!selectedSmall || radius === 0) {
       alert("업종과 분석 반경을 설정해주세요.");
@@ -1064,18 +1061,6 @@ const AnalysisPage = () => {
         setCoords({ lat, lng });
       }
     });
-
-    // 행정동 코드(개방자치단체코드 연동용) 가져오기
-    geocoder.coord2RegionCode(lng, lat, (result: any, status: any) => {
-      if (status === kakao.maps.services.Status.OK) {
-        const region = result.find((r: any) => r.region_type === 'H'); // 행정동 기준
-        if (region) {
-          // 행안부 자치단체코드는 보통 7자리입니다. (예: 3360000)
-          // 지역 코드 매핑이 필요할 수 있으나, 우선 7자리를 추출합니다.
-          setRegionCode(region.code.substring(0, 7));
-        }
-      }
-    });
   };
 
 
@@ -1159,7 +1144,7 @@ const AnalysisPage = () => {
             ? [geometry.coordinates[0].map((c: any) => new kakao.maps.LatLng(c[1], c[0]))]
             : geometry.coordinates.map((p: any) => p[0].map((c: any) => new kakao.maps.LatLng(c[1], c[0])));
 
-        paths.forEach(path => {
+        paths.forEach((path: any) => {
             const polygon = new kakao.maps.Polygon({
                 path,
                 strokeWeight: 1,
@@ -1382,7 +1367,6 @@ const AnalysisPage = () => {
         onStartAnalysis={handleStartAnalysis}
         onAutoSelect={handleAutoSelect}
         onLocationSelect={handleLocationSelect}
-        setSupportPrograms={setSupportPrograms}
       />
       
 
@@ -1397,7 +1381,6 @@ const AnalysisPage = () => {
           isReportLoading={isReportLoading}
           supportPrograms={supportPrograms}
           isSupportLoading={isSupportLoading}
-          setSupportPrograms={setSupportPrograms}
         />
         <MapControls
           showLandPrice={showLandPrice}
