@@ -862,8 +862,21 @@ async function _chatStep({ pool, openai, sessionData, userMessage = '' }) {
         };
     }
 
+    const _fieldLine = (f) => {
+        const hint = typeHint(f.kind);
+        const ph = f.placeholder_text ? ` 힌트=${f.placeholder_text}` : '';
+        const meta = parseLocation(f.location_json);
+        const options = Array.isArray(meta.options) ? meta.options.filter(Boolean).slice(0, 12) : [];
+        const optText = options.length > 0 ? ` options=[${options.join(', ')}]` : ' options=[]';
+        const ctx = meta.composed_label || meta.label_text || '';
+        const ctxText = ctx ? ` 맥락="${ctx}"` : '';
+        return `- id=${f.id} 라벨="${f.prompt_label}" kind=${f.kind}${ctxText}${ph}${optText}${hint ? ` (${hint})` : ''}`;
+    };
+
     const systemPrompt = [
         '너는 소상공인 신청서 작성을 돕는 친절한 한국어 비서야.',
+        `문서: ${session.program_title || '(미상)'}`,
+        '',
         '가장 중요한 규칙: 반드시 "현재 문서에서 확인 가능한 정보"로만 답해라.',
         '문서에 없는 값/카테고리/선택지를 추측해서 만들지 마라.',
         '사용자가 "어떤 게 있어?"라고 물었을 때, 문서에 명시된 선택지(options)가 있으면 그것만 보여줘라.',
@@ -872,6 +885,7 @@ async function _chatStep({ pool, openai, sessionData, userMessage = '' }) {
         'field_updates 에 넣을 수 있는 id 는 반드시 미수집 목록의 첫 번째 id 하나뿐이다. 뒤쪽 항목은 아직 묻지 않았으므로 절대 넣지 마라.',
         '값을 추출했다면 field_updates 에 {id, value} 를 최대 1개만 넣어라(위 첫 id에 해당하는 것만).',
         '입력 타입(kind) 에 맞는 형식을 안내하고, 사용자 답변이 형식과 어긋나면 부드럽게 다시 물어봐.',
+        '필드의 맥락·힌트를 활용해 사용자에게 무엇을 써야 하는지 구체적으로 설명해줘.',
         '',
         '★ 건너뛰기 처리:',
         '  사용자가 「모르겠다」 「비워두자」 「나중에」 「건너뛰자」 「skip」 같은 의사를 표현하면',
@@ -887,14 +901,7 @@ async function _chatStep({ pool, openai, sessionData, userMessage = '' }) {
         '불필요한 인사·반복은 줄이고 짧고 명확히 말해.',
         '',
         '미수집 필드:',
-        ...unfilled.map((f) => {
-            const hint = typeHint(f.kind);
-            const ph = f.placeholder_text ? ` 힌트=${f.placeholder_text}` : '';
-            const meta = parseLocation(f.location_json);
-            const options = Array.isArray(meta.options) ? meta.options.filter(Boolean).slice(0, 12) : [];
-            const optText = options.length > 0 ? ` options=[${options.join(', ')}]` : ' options=[]';
-            return `- id=${f.id} 라벨="${f.prompt_label}" kind=${f.kind}${ph}${optText}${hint ? ` (${hint})` : ''}`;
-        }),
+        ...unfilled.map(_fieldLine),
         '',
         '이미 채워진 필드:',
         ...autoFields.filter((f) => f.is_filled && f.value)

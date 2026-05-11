@@ -78,6 +78,57 @@ def main() -> int:
         print("FAIL: mask sample should not be fillable", fill_mask)
         return 1
 
+    # guide/header 셀도 fillable=True (label만 제외, LLM이 판단)
+    ag_guide = {
+        "grid_matrix": [["lab", "val"]],
+        "cells_by_id": {
+            "lab": {
+                "text": "기업 소개",
+                "anchor_abs_x": 0,
+                "anchor_abs_y": 0,
+                "row_span": 1,
+                "col_span": 1,
+                "neighbors": {"up": [], "down": [], "left": [], "right": ["val"]},
+            },
+            "val": {
+                "text": "* 기업의 차별성·경쟁력 및 강점 등을 포함하여 기업 소개 (28자 이상 예시문)",
+                "anchor_abs_x": 1,
+                "anchor_abs_y": 0,
+                "row_span": 1,
+                "col_span": 4,
+                "neighbors": {"up": [], "down": [], "left": ["lab"], "right": []},
+            },
+        },
+    }
+    guide_items = _build_cell_candidates_from_grid(ag_guide)
+    lab_item = next(it for it in guide_items if it["cell_id"] == "lab")
+    val_item = next(it for it in guide_items if it["cell_id"] == "val")
+    if lab_item["fillable"]:
+        print("FAIL: label should not be fillable", lab_item)
+        return 1
+    if not val_item["fillable"]:
+        print("FAIL: 28+ char example text should be fillable (guide role, LLM decides)", val_item)
+        return 1
+
+    # header 셀(span>=3 + text)도 fillable
+    ag_header = {
+        "grid_matrix": [["hdr"]],
+        "cells_by_id": {
+            "hdr": {
+                "text": "사업계획서",
+                "anchor_abs_x": 0,
+                "anchor_abs_y": 0,
+                "row_span": 1,
+                "col_span": 4,
+                "neighbors": {"up": [], "down": [], "left": [], "right": []},
+            },
+        },
+    }
+    hdr_items = _build_cell_candidates_from_grid(ag_header)
+    if not hdr_items[0]["fillable"]:
+        print("FAIL: header should be fillable (LLM decides)", hdr_items[0])
+        return 1
+
     print("OK: test_block_topology_grid_items")
     return 0
 

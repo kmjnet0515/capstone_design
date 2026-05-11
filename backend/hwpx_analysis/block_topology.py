@@ -86,7 +86,7 @@ def _build_cell_candidates_from_grid(ag: dict[str, Any]) -> list[dict[str, Any]]
     """
     grid_matrix 를 행 우선으로 순회해 고유 cell_id 마다 한 항목씩 만든다.
     - label: 해당 셀의 text (Grid-First 정의 줄에 그대로 사용)
-    - fillable: _guess_role 이 value 인 셀만 True (DB/입력 대상)
+    - fillable: label 전용 셀만 False, 나머지(guide/header/value)는 True → LLM이 판단
     """
     cells_by_id = ag.get("cells_by_id") or {}
     grid_matrix = ag.get("grid_matrix") or []
@@ -109,7 +109,7 @@ def _build_cell_candidates_from_grid(ag: dict[str, Any]) -> list[dict[str, Any]]
             cs = int(c.get("col_span", 1))
             rs = int(c.get("row_span", 1))
             role = _guess_role(text, cs, rs)
-            fillable = role == "value" and not _looks_like_mask_or_sample(text)
+            fillable = role != "label" and not _looks_like_mask_or_sample(text)
             out.append({
                 "cell_id": cell_id,
                 "label": text,
