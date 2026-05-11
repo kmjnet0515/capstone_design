@@ -10,6 +10,7 @@
     "test:topology_grid": "python3 scripts/test_block_topology_grid_items.py",
     "test:grid_first_pack": "node scripts/test_grid_first_pack.js",
     "dump:grid-first-llm": "node scripts/dump_grid_first_llm_input.js",
+    "grid-first:live": "node scripts/run_grid_first_llm_live.js",
     "test:pipeline": "npm run test:phase0 && npm run test:phase1 && npm run test:topology_grid && npm run test:grid_first_pack"
   },
   "keywords": [],

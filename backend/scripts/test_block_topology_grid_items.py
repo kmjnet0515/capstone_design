@@ -50,6 +50,34 @@ def main() -> int:
     if n_fill != 1:
         print("FAIL: fillable count", n_fill)
         return 1
+
+    ag_mask = {
+        "grid_matrix": [["m1", "m2"]],
+        "cells_by_id": {
+            "m1": {
+                "text": "사업자등록번호",
+                "anchor_abs_x": 0,
+                "anchor_abs_y": 0,
+                "row_span": 1,
+                "col_span": 1,
+                "neighbors": {"up": [], "down": [], "left": [], "right": []},
+            },
+            "m2": {
+                "text": "000-00-000(         )",
+                "anchor_abs_x": 1,
+                "anchor_abs_y": 0,
+                "row_span": 1,
+                "col_span": 1,
+                "neighbors": {"up": [], "down": [], "left": [], "right": []},
+            },
+        },
+    }
+    mask_items = _build_cell_candidates_from_grid(ag_mask)
+    fill_mask = [it for it in mask_items if it.get("fillable")]
+    if fill_mask:
+        print("FAIL: mask sample should not be fillable", fill_mask)
+        return 1
+
     print("OK: test_block_topology_grid_items")
     return 0
 

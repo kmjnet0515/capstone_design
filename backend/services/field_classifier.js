@@ -39,6 +39,11 @@ const SYSTEM_PROMPT = `너는 한국 정부·소상공인 신청서(.hwp/.hwpx)�
    - "-" 또는 placeholder 만 있는 셀이지만 의미는 "해당 없음"인 것
    - 이미 의미 있는 값이 채워진 셀(예: 빨간 안내 "유효기간 확인 必")
    - 안내문 스타일의 row(전체 폭 1셀에 긴 문장)
+   - 작성자가 격자만 보고 「여기 뭘 쓰라는 거지?」로 남는 빈칸(예: '서식 1' 옆 장식용 빈칸)
+   - 값 칸이 이미 길어도, 지우고 쓰라는 입력 과제가 아니라 예시·마스크·고정 안내로만 읽히는 칸
+
+   후보 셀마다 스스로 물어라: (빈 칸) 인접 라벨까지 고려한 뒤 「구체적으로 무엇을 한 문장으로 쓰라는 칸인가?」
+   모호하면 넣지 말라. (비빈 칸) 「지우고 내 내용으로 바꾸라는 칸인가?」가 아니면 넣지 말라.
 
 3) 입력 셀은 다음 input_type 중 하나로 분류:
    - "text"      : 일반 텍스트 (이름, 주소, 사업체명 등)
@@ -180,7 +185,7 @@ async function classifyFields(grids, openai, opts = {}) {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
         try {
             const res = await openai.chat.completions.create({
-                model,
+                model: opts.model || 'gpt-4o-mini',
                 temperature,
                 response_format: { type: 'json_object' },
                 messages: [
@@ -345,23 +350,59 @@ function reconcileClassificationWithFillable(cls, fillable) {
 const SYSTEM_PROMPT_BLOCKS = `너는 한국 정부·소상공인 신청서 «표(table) 안의 셀»을 분류한다.
 본문은 표가 아닌 영역은 후보에 포함되지 않는다.
 입력으로 아래 2가지를 받는다:
-1) cell 정의 목록: cell_n = '셀 안의 텍스트(빈칸이면 빈 문자열)', ((행들), (열들)) — 라벨 칸과 입력(값) 칸이 모두 포함될 수 있다.
+1) cell 정의 목록: cell_n = '셀 안의 텍스트(빈칸이면 빈 문자열)', ((행들), (열들)) — 라벨 칸과 입력(값) 칸이 모두 포함된다.
 2) 표별 grid preview: 병합셀은 동일 cell_n 이 여러 칸에 반복됨
 
 출력 classifications[].target_cell_id 에는 반드시 위에 등장한 cell_N 기호만 넣는다(예: cell_3). 내부 저장용 긴 id는 쓰지 않는다.
 좌표를 새로 추측하거나 만들지 마라.
 
-규칙:
+【사람처럼 자문 — 각 후보 cell_n 마다 아래를 순서대로 적용한다】
+
+■ 빈 칸(label 이 빈 문자열에 가깝거나 공백만)
+1) 인접 행·열·grid preview 로 「이 빈칸이 어떤 라벨에 대응하는 값 칸인가?」를 추론한다.
+2) 한 단계 더: 「실제 작성자 입장에서, 여기에 구체적으로 무엇을 쓰라는 건지 한 문장으로 말할 수 있는가?」
+3) 격자만 보고도 「'서식 1' 같은 번호 옆인데 **뭘 쓰라는 거지?** 이상한데?」처럼 느껴지면 → classifications 에 넣지 않는다(레이아웃·데코·의미 없는 공백).
+4) 반대로 「○○의 한 줄 소개를 쓰라는 칸이구나」처럼 쓸 내용의 종류가 분명하면 넣는다.
+
+■ 이미 글자가 있는 칸(label 에 텍스트가 있음)
+1) 「작성자가 이 칸을 지우고 자기 내용으로 바꾸라는 뜻으로 읽히는가?」
+2) 긴 * 로 시작한 예시 문단, 000-00-000 형, ○○○, 안내문만 있으면 보통은 예시·마스크·고정 안내로 보고 넣지 않는다.
+3) 「여기에 이걸 써야 하는구나」가 구체적인 입력 과제로 이어질 때만 넣는다.
+
+【출력 규칙】
 1) document_kind: application | notice | mixed
 2) 후보에 없는 cell / id 를 출력하지 마라.
-3) classifications 에는 «입력해야 하는 칸(fillable)»에 해당하는 cell_n 만 넣는다. 라벨 전용 칸·안내 문구만 있는 칸은 넣지 마라(격자와 정의는 맥락용).
+3) classifications 에는 위 자문을 통과한 cell_n 만 넣는다. 라벨 전용 칸·순수 안내만 있는 칸은 넣지 않는다.
 4) input_type: text, longtext, number, date, phone, email, biz_no, checkbox, radio, signature
 5) checkbox/radio 일 때만 options 배열
-6) prompt_label 은 인접 라벨·정의를 참고해 사용자에게 물을 짧은 한글 라벨로 써라(예: 정의에 cell_1='업체명' 이 있고 cell_2 가 빈 입력칸이면 cell_2 의 prompt_label 은 '업체명' 등으로).
+6) prompt_label 은 인접 라벨·정의를 참고해 사용자에게 물을 짧은 한글 라벨로 써라.
 7) 출력 JSON 에 abs_table_index, row_index, col_index, absolute_x, absolute_y 를 넣지 마라.
 
 출력 형식:
 {"document_kind":"...","confidence":0.0,"reason":"...","classifications":[{"target_cell_id":"...","input_type":"...","prompt_label":"...","options":null,"placeholder_hint":null}]}`;
+
+/**
+ * block_topology 와 동일한 «명백한» 마스크 — LLM이 잘못 넣었을 때 후처리용.
+ */
+function labelLooksLikeObviousMaskOrSample(label) {
+    const s = String(label || '').trim();
+    if (!s) return false;
+    const compact = s.replace(/[\s　]+/g, '');
+    if (/000[-－.]?00[-－.]?000/i.test(compact)) return true;
+    if (/ooo[-－.]?oo[-－.]?ooo/i.test(compact)) return true;
+    const core = s.replace(/[\s_·.\-]+/g, '');
+    if (core.length >= 2 && /^[○〇]+$/.test(core)) return true;
+    return false;
+}
+
+function _resolveBlockTopologyModel(opts) {
+    if (opts && opts.model) return opts.model;
+    if (typeof process !== 'undefined' && process.env) {
+        const e = process.env.OPENAI_BLOCK_TOPOLOGY_MODEL || process.env.OPENAI_GRID_FIRST_MODEL;
+        if (e && String(e).trim()) return String(e).trim();
+    }
+    return 'gpt-4o-mini';
+}
 
 /**
  * grid-first 입력 패키지 생성.
@@ -536,7 +577,7 @@ function buildGridFirstLlmMessages(topoPayload) {
 
     const gridIntro = [
         '【무엇을내나】표 안의 모든 논리 셀을 cell_n으로 정의한다(라벨·값·빈칸 모두). 같은 cell_n이 여러 칸에 반복되면 병합셀 점유를 의미한다.',
-        '【읽는 법】cell 정의의 ((rows), (cols))와 grid preview를 함께 보고, 빈 입력(fill) 칸만 classifications 에 넣는다.',
+        '【읽는 법】cell 정의의 ((rows), (cols))와 grid preview를 함께 보고, system 프롬프트의 「사람처럼 자문」을 통과한 칸만 classifications 에 넣는다.',
         '【ID 형식】target_cell_id에는 정의·프리뷰에 나온 cell_n만 사용한다. 서버가 cell_n을 내부 id로 바꾼다.',
         '',
         '【cell 정의 목록】',
@@ -544,6 +585,10 @@ function buildGridFirstLlmMessages(topoPayload) {
         '',
         `【grid preview | 표 셀 ${count}개 (입력 후보 fill ${fillableCount}개)】`,
         gridText || '(grid 없음)',
+        '',
+        '【판단 예시(이 문단에 나온 cell id는 실제 출력에 넣지 말 것 — 패턴만 참고)】',
+        '- 첫 행이 \'서식 1\' | 빈칸 | … 구조이고, 그 빈칸에 대해 「뭘 쓰라는 거지?」로만 남으면 그 빈칸 cell 은 classifications 에서 제외한다.',
+        '- 왼쪽 라벨이 \'수출 제품 (한줄 소개)\' 이고 값 칸에 긴 * 로 시작한 예시 문단만 있으면, 고정 안내·예시로 읽히면 제외한다.',
     ].join('\n');
 
     const systemContent = SYSTEM_PROMPT_BLOCKS;
@@ -576,9 +621,9 @@ function buildGridFirstLlmMessages(topoPayload) {
  * @param {object} topoPayload { ok, topology:{ blocks[] }, grids? }
  */
 async function classifyBlockTopology(topoPayload, openai, opts = {}) {
-    const model = opts.model || 'gpt-4o-mini';
+    const model = _resolveBlockTopologyModel(opts);
     const temperature = opts.temperature ?? 0;
-    const maxRetries = opts.maxRetries ?? 1;
+    const maxRetries = opts.maxRetries ?? 2;
 
     const prep = buildGridFirstLlmMessages(topoPayload);
     if (!prep.ok) {
@@ -620,6 +665,7 @@ async function classifyBlockTopology(topoPayload, openai, opts = {}) {
                 if (!sid || !byId.has(sid)) continue;
                 const slot = byId.get(sid);
                 if (!slot.fillable) continue;
+                if (labelLooksLikeObviousMaskOrSample(slot.label)) continue;
                 if (seen.has(sid)) continue;
                 seen.add(sid);
                 fields.push({
@@ -668,4 +714,5 @@ module.exports = {
     rehydrateClassificationWithGrids,
     reconcileClassificationWithFillable,
     buildGridFirstCandidatePack,
+    labelLooksLikeObviousMaskOrSample,
 };

@@ -14,6 +14,23 @@ from typing import Any
 _LABEL_TRAIL = re.compile(r"[:：\s]+$")
 _PLACEHOLDER_RE = re.compile(r"^[\s_\-\.·•\(\)\[\]▷▶■□◆◇★☆※]+$")
 _HAS_LETTER = re.compile(r"[가-힣A-Za-z]")
+# 명백한 사업자번호 더미·이름 마스크(○만) — LLM 전 얇은 안전망
+_BIZ_MASK_DUMMY = re.compile(r"000[-－.]?00[-－.]?000", re.I)
+_OOO_MASK_DUMMY = re.compile(r"ooo[-－.]?oo[-－.]?ooo", re.I)
+
+
+def _looks_like_mask_or_sample(text: str) -> bool:
+    """사업자번호 형 더미·○○○ 성명 등. 휴리스틱 최소: 패턴이 명백할 때만 True."""
+    s = (text or "").strip()
+    if not s:
+        return False
+    compact = re.sub(r"[\s　]+", "", s)
+    if _BIZ_MASK_DUMMY.search(compact) or _OOO_MASK_DUMMY.search(compact):
+        return True
+    core = re.sub(r"[\s_·.\-]+", "", s)
+    if len(core) >= 2 and re.fullmatch(r"[○〇]+", core):
+        return True
+    return False
 
 
 def _norm_label(s: str) -> str:
@@ -92,6 +109,7 @@ def _build_cell_candidates_from_grid(ag: dict[str, Any]) -> list[dict[str, Any]]
             cs = int(c.get("col_span", 1))
             rs = int(c.get("row_span", 1))
             role = _guess_role(text, cs, rs)
+            fillable = role == "value" and not _looks_like_mask_or_sample(text)
             out.append({
                 "cell_id": cell_id,
                 "label": text,
@@ -101,7 +119,7 @@ def _build_cell_candidates_from_grid(ag: dict[str, Any]) -> list[dict[str, Any]]
                 "row_span": rs,
                 "col_span": cs,
                 "neighbors": c.get("neighbors") or {"up": [], "down": [], "left": [], "right": []},
-                "fillable": role == "value",
+                "fillable": fillable,
             })
     return out
 

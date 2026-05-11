@@ -544,7 +544,7 @@ async function _runPrepareFromAttachment(pool, sessionId, { url, fileName }) {
             if (!grids || !grids.ok) throw new Error(`grids 포함 실패: ${grids && grids.error}`);
 
             await _setProgress(pool, sessionId, PROGRESS.CLASSIFYING);
-            const cls = await classifyBlockTopology(topoPayload, openaiOf(pool), { model: 'gpt-4o-mini', maxRetries: 1 });
+            const cls = await classifyBlockTopology(topoPayload, openaiOf(pool));
             if (!cls.ok) throw new Error(`블록 LLM 분류 실패: ${cls.error}`);
 
             documentCache.putCache(pool, {
