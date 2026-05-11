@@ -21,6 +21,7 @@ from .paragraph_edit import edit_simple_paragraph_text_file
 from .paragraph_edit import inject_paratext_into_empty_paragraph_file
 from .table_label_edit import edit_table_value_by_label
 from .table_label_edit import edit_table_value_at_position
+from .hwp_cell_id import parse_hwp_cell_id
 from .list_fillable_cells import list_fillable_cells_in_file
 from .extract_grids import extract_table_grids_in_file
 
@@ -338,6 +339,16 @@ def main() -> None:
         help="표 그리드(셀 텍스트 + 위치 메타) JSON 출력. LLM 분류기 입력용.",
     )
     parser.add_argument(
+        "--extract-blocks",
+        action="store_true",
+        help="extract-grids + Cell-ID canonical topology(JSON). HWPX 파이프라인과 동일 형태.",
+    )
+    parser.add_argument(
+        "--extract-blocks-summary",
+        action="store_true",
+        help="extract-blocks 와 동일 추출이지만 요약만 stdout (거대 JSON 없음).",
+    )
+    parser.add_argument(
         "--apply-fields-json",
         metavar="PATH",
         help="JSON 파일의 fields[]를 순차 적용. 각 항목 형식: "
@@ -356,6 +367,34 @@ def main() -> None:
             print(json.dumps({"ok": False, "error": f"파일 없음: {args.hwp_path}"}, ensure_ascii=False))
             sys.exit(2)
         out = list_fillable_cells_in_file(args.hwp_path)
+        print(json.dumps(out, ensure_ascii=False, indent=2, default=str))
+        return
+
+    if args.extract_blocks_summary:
+        if not os.path.isfile(args.hwp_path):
+            print(json.dumps({"ok": False, "error": f"파일 없음: {args.hwp_path}"}, ensure_ascii=False))
+            sys.exit(2)
+        from hwpx_analysis.block_topology import build_document_topology
+
+        _backend_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if _backend_root not in sys.path:
+            sys.path.insert(0, _backend_root)
+        from extract_summary import print_extract_blocks_summary
+
+        grids = extract_table_grids_in_file(args.hwp_path)
+        topo = build_document_topology(grids)
+        print_extract_blocks_summary(grids, topo)
+        return
+
+    if args.extract_blocks:
+        if not os.path.isfile(args.hwp_path):
+            print(json.dumps({"ok": False, "error": f"파일 없음: {args.hwp_path}"}, ensure_ascii=False))
+            sys.exit(2)
+        from hwpx_analysis.block_topology import build_document_topology
+
+        grids = extract_table_grids_in_file(args.hwp_path)
+        topo = build_document_topology(grids)
+        out = {"ok": grids.get("ok", False), "grids": grids, "topology": topo}
         print(json.dumps(out, ensure_ascii=False, indent=2, default=str))
         return
 
@@ -400,6 +439,46 @@ def main() -> None:
             vc = int(f.get("value_col", 1))
             lc = int(f.get("label_col", 0))
             lbl = str(f.get("label_text", ""))
+            schema_version = int(f.get("schema_version", 0) or 0)
+            target_cell_id = f.get("target_cell_id")
+
+            if schema_version == 3 and target_cell_id:
+                parsed = parse_hwp_cell_id(str(target_cell_id))
+                if not parsed:
+                    results.append({"index": idx, "ok": False, "error": f"invalid target_cell_id: {target_cell_id}", "field": f})
+                    continue
+                si, ti, row_index, vc = parsed[0], parsed[1], parsed[2], parsed[3]
+                ed = edit_table_value_at_position(
+                    cur_in,
+                    tmp_out,
+                    section_index=si,
+                    table_index=ti,
+                    row_index=int(row_index),
+                    value_col=int(vc),
+                    new_visible_text=str(value),
+                )
+                if not ed.get("ok"):
+                    for alt_si in _hwp_section_indexes(cur_in):
+                        if alt_si == si:
+                            continue
+                        ed = edit_table_value_at_position(
+                            cur_in,
+                            tmp_out,
+                            section_index=alt_si,
+                            table_index=ti,
+                            row_index=int(row_index),
+                            value_col=int(vc),
+                            new_visible_text=str(value),
+                        )
+                        if ed.get("ok"):
+                            break
+                if not ed.get("ok"):
+                    results.append({"index": idx, "ok": False, "error": ed.get("error"), "field": f})
+                    continue
+                applied += 1
+                cur_in = tmp_out
+                results.append({"index": idx, "ok": True, "field": f})
+                continue
 
             if row_index is not None:
                 ed = edit_table_value_at_position(

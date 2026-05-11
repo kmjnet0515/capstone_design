@@ -34,7 +34,7 @@ const { analysisQueue } = require('../services/analysis_queue');
 const FILLED_TTL_MIN = parseInt(process.env.APPLICATION_FILLED_TTL_MIN || '15', 10);
 
 /** 그리드 추출·위치 검증·캐시 스키마 변경 시 1씩 올려 기존 캐시 무효화 */
-const APPLICATION_ANALYSIS_REVISION = 4;
+const APPLICATION_ANALYSIS_REVISION = 7;
 
 const PROGRESS = {
     QUEUED:        { stage: 'queued',           percent: 5 },
@@ -516,7 +516,7 @@ async function _runPrepareFromAttachment(pool, sessionId, { url, fileName }) {
             [fileHash, sessionId]
         );
 
-        const useBlockPipeline = process.env.USE_BLOCK_PIPELINE === '1' && safeExt === 'hwpx';
+        const useBlockPipeline = safeExt === 'hwpx' || safeExt === 'hwp';
 
         const cached = await documentCache.getCached(pool, fileHash).catch(() => null);
         let analyzed;
@@ -686,6 +686,9 @@ function _classificationToRows(cls, format) {
     const filtered = (cls.fields || []).filter((f) => {
         const it = String(f.input_type || '').toLowerCase();
         if (!SAFE_INPUT_TYPES.has(it) && !MANUAL_ONLY_TYPES.has(it)) return false;
+        if (f.schema_version === 3 || ((fmt === 'hwpx' || fmt === 'hwp') && typeof f.target_cell_id === 'string')) {
+            return Number.isInteger(f.table_index) && typeof f.section_path === 'string' && f.section_path.trim();
+        }
         if (f.schema_version === 2 || (fmt === 'hwpx' && Number.isInteger(f.absolute_x) && Number.isInteger(f.absolute_y))) {
             return Number.isInteger(f.table_index) && typeof f.section_path === 'string' && f.section_path.trim();
         }
@@ -706,7 +709,21 @@ function _classificationToRows(cls, format) {
         const gridLabelCol = Number.isInteger(f._grid_label_col) ? f._grid_label_col : null;
 
         let location;
-        if (f.schema_version === 2 || (fmt === 'hwpx' && Number.isInteger(f.absolute_x))) {
+        if (f.schema_version === 3 || ((fmt === 'hwpx' || fmt === 'hwp') && typeof f.target_cell_id === 'string')) {
+            location = {
+                schema_version: 3,
+                section_path: f.section_path,
+                table_index: f.table_index,
+                target_cell_id: f.target_cell_id,
+                label_text: f.label_text || docLab || f.prompt_label,
+                composed_label: f.context ? `${f.context} / ${f.prompt_label}` : null,
+                input_type: it,
+                options: f.options || null,
+                manual_only: isManual || null,
+                block_id: f.block_id ?? null,
+                apply_strategy: 'cell_id',
+            };
+        } else if (f.schema_version === 2 || (fmt === 'hwpx' && Number.isInteger(f.absolute_x))) {
             location = {
                 schema_version: 2,
                 section_path: f.section_path,
@@ -851,9 +868,9 @@ async function _chatStep({ pool, openai, sessionData, userMessage = '' }) {
         '문서에 없는 값/카테고리/선택지를 추측해서 만들지 마라.',
         '사용자가 "어떤 게 있어?"라고 물었을 때, 문서에 명시된 선택지(options)가 있으면 그것만 보여줘라.',
         'options가 없으면 "문서에 선택지가 명시되지 않았다"고 말하고 임의 리스트를 절대 만들지 마라.',
-        '아래 미수집 필드 목록 중 가장 위에 있는 항목 하나를 사용자에게 자연스럽게 한 번에 하나씩 물어봐.',
-        '사용자가 직전 답변에서 여러 항목 값을 동시에 알려줬다면 가능한 만큼 field_updates 에 한꺼번에 넣어도 좋아.',
-        '값을 추출했다면 field_updates 에 {id, value} 형태로 채워줘.',
+        '아래 미수집 필드 목록 중 가장 위에 있는 항목(맨 위 id 하나)만 이번에 다룬다.',
+        'field_updates 에 넣을 수 있는 id 는 반드시 미수집 목록의 첫 번째 id 하나뿐이다. 뒤쪽 항목은 아직 묻지 않았으므로 절대 넣지 마라.',
+        '값을 추출했다면 field_updates 에 {id, value} 를 최대 1개만 넣어라(위 첫 id에 해당하는 것만).',
         '입력 타입(kind) 에 맞는 형식을 안내하고, 사용자 답변이 형식과 어긋나면 부드럽게 다시 물어봐.',
         '',
         '★ 건너뛰기 처리:',
@@ -904,9 +921,19 @@ async function _chatStep({ pool, openai, sessionData, userMessage = '' }) {
     let parsed;
     try { parsed = JSON.parse(raw); } catch (_e) { parsed = { reply: raw, field_updates: [] }; }
 
-    const updates = Array.isArray(parsed.field_updates) ? parsed.field_updates : [];
+    const updatesRaw = Array.isArray(parsed.field_updates) ? parsed.field_updates : [];
     const skips = Array.isArray(parsed.field_skips) ? parsed.field_skips : [];
     const validIds = new Set(fields.map((f) => f.id));
+    // 순차 진행 강제: 한 턴에는 맨 앞 미수집 1칸만 채움 (LLM이 다른 id에 동일 값 복제하는 것 방지)
+    const headUnfilledId = unfilled[0]?.id ?? null;
+    const updates = updatesRaw.filter((u) => Number(u?.id) === headUnfilledId);
+    if (updatesRaw.length > updates.length && headUnfilledId != null) {
+        console.warn('[applications] chat field_updates: dropped non-head ids', {
+            sessionId: session.id,
+            headUnfilledId,
+            rawIds: updatesRaw.map((u) => u?.id),
+        });
+    }
     let appliedCount = 0;
     let skippedCount = 0;
     for (const u of updates) {

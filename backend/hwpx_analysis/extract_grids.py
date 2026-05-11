@@ -80,7 +80,7 @@ def extract_table_grids_in_hwpx(hwpx_path: str) -> dict[str, Any]:
                 xml_bytes = zf.read(sp)
                 tables = _extract_section_grids(xml_bytes, sp)
                 try:
-                    attach_absolute_grids_to_tables(tables, xml_bytes)
+                    attach_absolute_grids_to_tables(tables, xml_bytes, section_path=sp)
                 except (ET.ParseError, ValueError):
                     for t in tables:
                         t.setdefault("absolute_grid", {"grid_confidence": "degraded", "error": "absolute_grid_failed"})

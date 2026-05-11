@@ -20,6 +20,10 @@ from .table_adjacent_edit import (
 )
 
 
+def make_cell_id(section_path: str, table_index: int, anchor_y: int, anchor_x: int) -> str:
+    return f"{section_path}#{table_index}#r{anchor_y}c{anchor_x}"
+
+
 def _parse_int_attr(el: ET.Element, *keys: str, default: int = 1) -> int:
     for k in keys:
         v = el.get(k)
@@ -45,7 +49,12 @@ def _parse_int_attr(el: ET.Element, *keys: str, default: int = 1) -> int:
     return default
 
 
-def build_absolute_grid_for_tbl(tbl: ET.Element) -> dict[str, Any]:
+def build_absolute_grid_for_tbl(
+    tbl: ET.Element,
+    *,
+    section_path: str = "",
+    table_index: int = 0,
+) -> dict[str, Any]:
     """단일 hp:tbl → 논리 격자."""
     rows_el = _tr_children(tbl)
     if not rows_el:
@@ -125,10 +134,13 @@ def build_absolute_grid_for_tbl(tbl: ET.Element) -> dict[str, Any]:
 
     grid_meta: list[list[dict[str, Any]]] = []
     grid_text: list[list[str]] = []
+    grid_matrix: list[list[str]] = []
+    cells_by_id: dict[str, dict[str, Any]] = {}
 
     for r in range(n_rows):
         row_m: list[dict[str, Any]] = []
         row_txt: list[str] = []
+        row_ids: list[str] = []
         width = max(n_cols, len(slot[r]) if r < len(slot) else 0)
         for c in range(width):
             if r >= len(slot) or c >= len(slot[r]):
@@ -145,6 +157,7 @@ def build_absolute_grid_for_tbl(tbl: ET.Element) -> dict[str, Any]:
                     "has_t": False,
                     "hole": True,
                 })
+                row_ids.append("")
                 degraded = True
                 continue
 
@@ -163,6 +176,7 @@ def build_absolute_grid_for_tbl(tbl: ET.Element) -> dict[str, Any]:
                     "has_t": False,
                     "hole": True,
                 })
+                row_ids.append("")
                 degraded = True
                 continue
 
@@ -183,6 +197,19 @@ def build_absolute_grid_for_tbl(tbl: ET.Element) -> dict[str, Any]:
                     "row_span": rs,
                     "has_t": cell["has_t"],
                 })
+                cell_id = make_cell_id(section_path, table_index, r, c)
+                row_ids.append(cell_id)
+                if cell_id not in cells_by_id:
+                    cells_by_id[cell_id] = {
+                        "cell_id": cell_id,
+                        "anchor_abs_x": c,
+                        "anchor_abs_y": r,
+                        "row_span": rs,
+                        "col_span": cs,
+                        "text": txt,
+                        "role_hint": "unknown",
+                        "neighbors": {"up": [], "down": [], "left": [], "right": []},
+                    }
             else:
                 ay, ax = cell["anchor_y"], cell["anchor_x"]
                 row_txt.append("")
@@ -197,8 +224,26 @@ def build_absolute_grid_for_tbl(tbl: ET.Element) -> dict[str, Any]:
                     "row_span": 1,
                     "has_t": False,
                 })
+                row_ids.append(make_cell_id(section_path, table_index, ay, ax))
         grid_text.append(row_txt)
         grid_meta.append(row_m)
+        grid_matrix.append(row_ids)
+
+    # 인접 관계(중복 제거) 계산
+    for r, row in enumerate(grid_matrix):
+        for c, cid in enumerate(row):
+            if not cid or cid not in cells_by_id:
+                continue
+            for dr, dc, side in [(-1, 0, "up"), (1, 0, "down"), (0, -1, "left"), (0, 1, "right")]:
+                rr, cc = r + dr, c + dc
+                if rr < 0 or cc < 0 or rr >= len(grid_matrix) or cc >= len(grid_matrix[rr]):
+                    continue
+                nid = grid_matrix[rr][cc]
+                if not nid or nid == cid:
+                    continue
+                arr = cells_by_id[cid]["neighbors"][side]
+                if nid not in arr:
+                    arr.append(nid)
 
     conf = "degraded" if degraded else "high"
     return {
@@ -207,17 +252,28 @@ def build_absolute_grid_for_tbl(tbl: ET.Element) -> dict[str, Any]:
         "grid_confidence": conf,
         "cells": grid_meta,
         "rows_text": grid_text,
+        "grid_matrix": grid_matrix,
+        "cells_by_id": cells_by_id,
     }
 
 
-def attach_absolute_grids_to_tables(section_tables: list[dict[str, Any]], xml_bytes: bytes) -> None:
+def attach_absolute_grids_to_tables(
+    section_tables: list[dict[str, Any]],
+    xml_bytes: bytes,
+    *,
+    section_path: str = "",
+) -> None:
     """in-place: 각 table dict 에 absolute_grid 필드 추가 (Element는 직렬화 불가 → 메타만)."""
     root = ET.fromstring(xml_bytes)
     tbls = list(_iter_tbl_depth_first(root))
     for i, tdict in enumerate(section_tables):
         if i >= len(tbls):
             continue
-        ag = build_absolute_grid_for_tbl(tbls[i])
+        ag = build_absolute_grid_for_tbl(
+            tbls[i],
+            section_path=section_path,
+            table_index=int(tdict.get("table_index", i)),
+        )
         # cells 에 ET 참조 제거 — JSON 안전
         clean_cells: list[list[dict[str, Any]]] = []
         for row in ag.get("cells", []):

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import re
+import struct
 import unicodedata
 from contextlib import closing
 from io import BytesIO
@@ -30,6 +31,37 @@ _CTRL = HWPTAG_BEGIN + 55  # CTRL_HEADER
 _LIST = HWPTAG_BEGIN + 56  # LIST_HEADER (셀)
 
 _LABEL_TRAILING_RE = re.compile(r"[:：\s]+$")
+
+# ListHeader 기본(8바이트) + TableCell 고정 필드(표 75, pyhwp TableCell.attributes)
+_TABLE_CELL_LIST_HEADER_MIN = 8 + 30
+
+
+def unpack_table_cell_list_header_payload(payload: bytes) -> dict[str, int] | None:
+    """
+    표 본문(TableBody) 이후 셀용 LIST_HEADER payload 에서 TableCell 기하만 읽는다.
+    (hwp5.binmodel.tagid56_list_header.TableCell 과 동일 레이아웃)
+    """
+    if not payload or len(payload) < _TABLE_CELL_LIST_HEADER_MIN:
+        return None
+    try:
+        struct.unpack_from("<HHI", payload, 0)
+        col, row, cs, rs, w, h, _pl, _pr, _pt, _pb, _bf, _uw = struct.unpack_from(
+            "<HHHHiiHHHHHi", payload, 8
+        )
+    except struct.error:
+        return None
+    if cs <= 0:
+        cs = 1
+    if rs <= 0:
+        rs = 1
+    return {
+        "table_col": int(col),
+        "table_row": int(row),
+        "table_colspan": int(cs),
+        "table_rowspan": int(rs),
+        "table_width": int(w),
+        "table_height": int(h),
+    }
 
 
 def _normalize_label_compare(text: str) -> str:
@@ -103,6 +135,7 @@ def _iter_table_cells_full(
         if r["level"] <= ctrl_level:
             break
         if r["tagid"] == _LIST and r["level"] == base_level:
+            list_header_rec = r
             list_level = r["level"]
             i += 1
             texts: list[str] = []
@@ -134,12 +167,16 @@ def _iter_table_cells_full(
                     continue
                 i += 1
             plain = "".join(texts).strip()
-            out.append({
+            cell: dict[str, Any] = {
                 "text": plain,
                 "first_pt": first_pt,
                 "first_para_hdr": first_hdr,
                 "empty_para_hdrs": empty_hdrs,
-            })
+            }
+            geom = unpack_table_cell_list_header_payload(list_header_rec.get("payload") or b"")
+            if geom:
+                cell.update(geom)
+            out.append(cell)
             continue
         i += 1
     return out

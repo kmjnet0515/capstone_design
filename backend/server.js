@@ -514,6 +514,38 @@ app.get('/api/real-estate/trade', async (req, res) => {
     }
 });
 
+/** GML/WFS 좌표 문자열 "lng,lat lng,lat …" 에서 필지 근사 중심(외곽 꼭지점 산술평균). 닫히는 마지막 점과 첫 점이 같으면 제외. */
+const parseLandGeomCentroid = (coordStr) => {
+    if (!coordStr || typeof coordStr !== 'string') return null;
+    const cleanStr = coordStr.trim().replace(/\s+/g, ' ');
+    const pairs = cleanStr.split(' ').filter(Boolean);
+    const points = [];
+    for (const pair of pairs) {
+        const parts = pair.split(',');
+        if (parts.length < 2) continue;
+        const lng = parseFloat(parts[0]);
+        const lat = parseFloat(parts[1]);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+        points.push({ lng, lat });
+    }
+    if (points.length === 0) return null;
+    if (points.length > 2) {
+        const a = points[0];
+        const z = points[points.length - 1];
+        if (a.lat === z.lat && a.lng === z.lng) points.pop();
+    }
+    let sumLat = 0;
+    let sumLng = 0;
+    for (const p of points) {
+        sumLat += p.lat;
+        sumLng += p.lng;
+    }
+    return {
+        lat: sumLat / points.length,
+        lng: sumLng / points.length
+    };
+};
+
 
 app.get('/api/real-estate/land-price', async (req, res) => {
     const { bbox } = req.query;
@@ -576,11 +608,11 @@ app.get('/api/real-estate/land-price', async (req, res) => {
                 const coordStr = findCoords(item.ag_geom);
 
                 if (coordStr) {
-                    const cleanStr = coordStr.trim().replace(/\s+/g, ' '); 
-                    const pairs = cleanStr.split(' ');
-                    const firstPair = pairs[0].split(',');
-                    lng = parseFloat(firstPair[0]);
-                    lat = parseFloat(firstPair[1]);
+                    const c = parseLandGeomCentroid(coordStr);
+                    if (c) {
+                        lat = c.lat;
+                        lng = c.lng;
+                    }
                 }
 
                 if (lat && lng) {

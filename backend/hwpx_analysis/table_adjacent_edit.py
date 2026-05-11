@@ -19,6 +19,7 @@ from .opc_manifest import discover_section_members, resolve_section_member
 from .package_zip import repackage_with_overrides
 
 _LABEL_TRAILING_RE = re.compile(r"[:：\s]+$")
+_CELL_ID_RE = re.compile(r"^(.+)#(\d+)#r(\d+)c(\d+)$")
 
 
 def _normalize_label_compare(text: str) -> str:
@@ -193,6 +194,14 @@ def find_anchor_tc_at(tbl: ET.Element, abs_x: int, abs_y: int) -> ET.Element | N
     ay, ax = cell["anchor_y"], cell["anchor_x"]
     anchor = slot[ay][ax]
     return anchor.get("tc") if anchor and anchor.get("kind") == "anchor" else None
+
+
+def parse_cell_id(cell_id: str) -> tuple[str, int, int, int] | None:
+    m = _CELL_ID_RE.match(str(cell_id or "").strip())
+    if not m:
+        return None
+    sec_path, ti, ay, ax = m.group(1), int(m.group(2)), int(m.group(3)), int(m.group(4))
+    return sec_path, ti, ax, ay
 
 
 def patch_section_xml_table_label(

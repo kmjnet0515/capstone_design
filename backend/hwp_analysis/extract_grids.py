@@ -15,6 +15,8 @@ from contextlib import closing
 from typing import Any
 
 from .paragraph_edit import _read_records
+from .hwp_cell_id import section_path_for_index
+from .hwp_grid_canonical import build_absolute_grid_hwp, try_build_absolute_grid_from_table_cell_geometry
 from .table_label_edit import (
     _TBL,
     _iter_table_cells_full,
@@ -83,15 +85,41 @@ def extract_table_grids_in_file(hwp_path: str) -> dict[str, Any]:
                         col_counts_eff = rowcols
                         grid_integrity = "ok"
 
-                    tables.append({
+                    tdict = {
                         "table_index": ti,
                         "row_count": len(rows_grid),
                         "col_counts": col_counts_eff,
                         "rows": rows_grid,
                         "_cell_meta": rows_meta,  # 서버 보관, LLM 노출 금지
                         "grid_layout_integrity": grid_integrity,
-                    })
+                    }
+                    try:
+                        if grid_integrity == "ok":
+                            grouped_cells = [[d for (_, d) in row] for row in grouped]
+                            ag = try_build_absolute_grid_from_table_cell_geometry(
+                                section_index=si,
+                                table_index=ti,
+                                rows_text=rows_grid,
+                                grouped_rows=grouped_cells,
+                            )
+                            if ag is None:
+                                ag = build_absolute_grid_hwp(
+                                    section_index=si,
+                                    table_index=ti,
+                                    rows_text=rows_grid,
+                                )
+                            tdict["absolute_grid"] = ag
+                        else:
+                            tdict["absolute_grid"] = build_absolute_grid_hwp(
+                                section_index=si,
+                                table_index=ti,
+                                rows_text=rows_grid,
+                            )
+                    except (ValueError, TypeError, IndexError):
+                        tdict["absolute_grid"] = {"grid_confidence": "degraded", "error": "hwp_canonical_grid_failed"}
+                    tables.append(tdict)
                 sections_out.append({
+                    "section_path": section_path_for_index(si),
                     "section_index": si,
                     "table_count": len(tables),
                     "tables": tables,

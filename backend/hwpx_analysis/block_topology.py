@@ -43,27 +43,67 @@ def stable_block_id(section_path: str, table_index: int) -> str:
     return hashlib.sha256(raw).hexdigest()[:16]
 
 
-def _pairwise_slots_from_grid(rows_text: list[list[str]]) -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = []
-    for abs_y, row in enumerate(rows_text):
-        ci = 0
-        while ci < len(row) - 1:
-            left = row[ci]
-            right = row[ci + 1]
-            if _is_label_candidate(left) and _is_value_empty(right):
-                items.append({
-                    "label": _norm_label(left),
-                    "abs_x": ci + 1,
-                    "abs_y": abs_y,
-                    "label_abs_x": ci,
-                    "label_abs_y": abs_y,
-                    "value_preview": (right or "").strip(),
-                    "kind": "pairwise",
-                })
-                ci += 2
-            else:
-                ci += 1
-    return items
+def _is_guide_like(text: str) -> bool:
+    s = (text or "").strip()
+    if not s:
+        return False
+    if len(s) >= 28:
+        return True
+    return bool(re.search(r"(유의|안내|참고|작성|기재|확인|선택)", s))
+
+
+def _guess_role(text: str, span_w: int, span_h: int) -> str:
+    s = (text or "").strip()
+    if _is_guide_like(s):
+        return "guide"
+    if span_w >= 3 and span_h >= 1 and len(s) > 0:
+        return "header"
+    if _is_label_candidate(s):
+        return "label"
+    if _is_value_empty(s):
+        return "value"
+    return "value"
+
+
+def _build_cell_candidates_from_grid(ag: dict[str, Any]) -> list[dict[str, Any]]:
+    """
+    grid_matrix 를 행 우선으로 순회해 고유 cell_id 마다 한 항목씩 만든다.
+    - label: 해당 셀의 text (Grid-First 정의 줄에 그대로 사용)
+    - fillable: _guess_role 이 value 인 셀만 True (DB/입력 대상)
+    """
+    cells_by_id = ag.get("cells_by_id") or {}
+    grid_matrix = ag.get("grid_matrix") or []
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+
+    for row in grid_matrix:
+        if not isinstance(row, (list, tuple)):
+            continue
+        for cell_id in row:
+            if not cell_id or not isinstance(cell_id, str):
+                continue
+            if cell_id in seen:
+                continue
+            seen.add(cell_id)
+            c = cells_by_id.get(cell_id)
+            if not c:
+                continue
+            text = (c.get("text") or "").strip()
+            cs = int(c.get("col_span", 1))
+            rs = int(c.get("row_span", 1))
+            role = _guess_role(text, cs, rs)
+            out.append({
+                "cell_id": cell_id,
+                "label": text,
+                "abs_x": int(c.get("anchor_abs_x", 0)),
+                "abs_y": int(c.get("anchor_abs_y", 0)),
+                "role_hint": role,
+                "row_span": rs,
+                "col_span": cs,
+                "neighbors": c.get("neighbors") or {"up": [], "down": [], "left": [], "right": []},
+                "fillable": role == "value",
+            })
+    return out
 
 
 def build_document_topology(extract_result: dict[str, Any]) -> dict[str, Any]:
@@ -79,12 +119,13 @@ def build_document_topology(extract_result: dict[str, Any]) -> dict[str, Any]:
         for tbl in sec.get("tables") or []:
             ti = int(tbl.get("table_index", 0))
             ag = tbl.get("absolute_grid") or {}
-            rows_text = ag.get("rows_text") or tbl.get("rows") or []
             conf = ag.get("grid_confidence") or "unknown"
             bid = stable_block_id(sp, ti)
+            grid_matrix = ag.get("grid_matrix") or []
+            cells_by_id = ag.get("cells_by_id") or {}
 
-            items = _pairwise_slots_from_grid(rows_text)
-            layout = "pairwise"
+            items = _build_cell_candidates_from_grid(ag)
+            layout = "cell_graph"
             if not items:
                 layout = "table_singleton"
                 items = []
@@ -96,6 +137,8 @@ def build_document_topology(extract_result: dict[str, Any]) -> dict[str, Any]:
                 "layout": layout,
                 "grid_confidence": conf,
                 "parent_label": None,
+                "grid_matrix": grid_matrix,
+                "cells_by_id": cells_by_id,
                 "items": items,
             })
 

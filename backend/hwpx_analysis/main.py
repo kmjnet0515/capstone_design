@@ -14,6 +14,7 @@ from .edit_package import apply_text_replacements
 from .table_adjacent_edit import edit_hwpx_table_value_by_label
 from .table_adjacent_edit import edit_hwpx_table_value_at_position
 from .table_adjacent_edit import edit_hwpx_table_value_absolute
+from .table_adjacent_edit import parse_cell_id
 from .engine import analyze_document
 from .package_zip import list_package_index
 from .list_fillable_cells import list_fillable_cells_in_hwpx
@@ -112,6 +113,11 @@ def main() -> None:
         help="extract-grids + 블록/슬롯 토폴로지(JSON). 의미 분석 없음.",
     )
     parser.add_argument(
+        "--extract-blocks-summary",
+        action="store_true",
+        help="extract-blocks 와 동일 추출이지만 요약만 stdout (거대 JSON 없음).",
+    )
+    parser.add_argument(
         "--apply-fields-json",
         metavar="PATH",
         help="JSON 파일의 fields[]를 순차 적용. 각 항목 형식: "
@@ -141,6 +147,18 @@ def main() -> None:
     if args.extract_grids:
         out = extract_table_grids_in_hwpx(args.hwpx_path)
         print(json.dumps(out, ensure_ascii=False, indent=2, default=str))
+        return
+
+    if args.extract_blocks_summary:
+        import sys as _sys
+        _backend = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if _backend not in _sys.path:
+            _sys.path.insert(0, _backend)
+        from extract_summary import print_extract_blocks_summary
+
+        grids = extract_table_grids_in_hwpx(args.hwpx_path)
+        topo = build_document_topology(grids)
+        print_extract_blocks_summary(grids, topo)
         return
 
     if args.extract_blocks:
@@ -186,6 +204,24 @@ def main() -> None:
             lbl = str(f.get("label_text", ""))
             abs_x = f.get("absolute_x")
             abs_y = f.get("absolute_y")
+            schema_version = int(f.get("schema_version", 0) or 0)
+            target_cell_id = f.get("target_cell_id")
+
+            if schema_version == 3 and target_cell_id:
+                parsed = parse_cell_id(str(target_cell_id))
+                if not parsed:
+                    results.append({"index": idx, "ok": False, "error": f"invalid target_cell_id: {target_cell_id}", "field": f})
+                    continue
+                cid_sec, cid_ti, cid_x, cid_y = parsed
+                if sec_path and sec_path != cid_sec:
+                    results.append({"index": idx, "ok": False, "error": "section_path != target_cell_id", "field": f})
+                    continue
+                if ti != cid_ti:
+                    results.append({"index": idx, "ok": False, "error": "table_index != target_cell_id", "field": f})
+                    continue
+                sec_path = cid_sec
+                abs_x = cid_x
+                abs_y = cid_y
 
             if abs_x is not None and abs_y is not None:
                 ed = edit_hwpx_table_value_absolute(
@@ -207,6 +243,9 @@ def main() -> None:
                         absolute_y=int(abs_y),
                         new_value=str(value),
                     )
+                if schema_version == 3 and not ed.get("ok"):
+                    results.append({"index": idx, "ok": False, "error": ed.get("error"), "field": f})
+                    continue
             if not ed.get("ok") and row_index is not None:
                 ed = edit_hwpx_table_value_at_position(
                     cur_in,

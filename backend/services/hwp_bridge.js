@@ -117,10 +117,11 @@ async function extractTableGrids(filePath, { timeoutMs } = {}) {
  */
 async function extractDocumentTopology(filePath, { timeoutMs } = {}) {
     const format = detectFormat(filePath);
-    if (format !== 'hwpx') {
-        return { ok: false, error: 'extractDocumentTopology 는 .hwpx 만 지원합니다.', format };
+    if (format !== 'hwpx' && format !== 'hwp') {
+        return { ok: false, error: 'extractDocumentTopology 는 .hwp / .hwpx 만 지원합니다.', format };
     }
-    const args = ['-m', 'hwpx_analysis', filePath, '--extract-blocks'];
+    const mod = format === 'hwpx' ? 'hwpx_analysis' : 'hwp_analysis';
+    const args = ['-m', mod, filePath, '--extract-blocks'];
     let parsed;
     try {
         const { stdout, stderr } = await _runPython(args, { timeoutMs });

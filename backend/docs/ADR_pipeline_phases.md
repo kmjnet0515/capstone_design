@@ -10,10 +10,12 @@
 
 - `hwpx_analysis/block_topology.py` + CLI `--extract-blocks`.
 - 게이트 실패 시 `apply_minimal_block_fallback`으로 표 단일 블록·빈 items.
+- `items[]`: `grid_matrix` 행 우선·고유 `cell_id` 순으로 **표의 모든 논리 셀**(라벨·값·빈칸). 각 항목에 `fillable`(입력 대상=value 역할) 플래그. Grid-First LLM 입력의 `cell_n` 정의·격자는 전체 셀, DB 필드는 `fillable`만.
 
 ## Phase 3
 
 - `USE_BLOCK_PIPELINE=1` 이고 확장자 `.hwpx`일 때 `classifyBlockTopology` (좌표는 Python 슬롯 고정).
+- `classifyBlockTopology`: 프롬프트에는 전체 `cell_n`·`token_map`을 보내고, 응답 `fields`는 `fillable` 슬롯만 채택한다.
 - 레거시: 기존 `classifyFields` + `reconcileClassificationWithFillable`.
 
 ## Phase 4

@@ -122,12 +122,40 @@ function validateLocationV2(loc, format) {
 }
 
 /**
+ * schema_version 3 (cell_id 고정).
+ */
+function validateLocationV3(loc, format) {
+    if (format !== 'hwpx' && format !== 'hwp') return false;
+    const sp = loc.section_path;
+    if (typeof sp !== 'string' || !sp.trim()) return false;
+    const ti = loc.table_index;
+    if (!Number.isInteger(ti) || ti < 0) return false;
+    const cid = loc.target_cell_id;
+    if (typeof cid !== 'string' || !cid.trim()) return false;
+    if (format === 'hwpx') {
+        const m = cid.match(/^(.+)#(\d+)#r(\d+)c(\d+)$/);
+        if (!m) return false;
+        if (m[1] !== sp) return false;
+        if (Number(m[2]) !== ti) return false;
+        return true;
+    }
+    const m = cid.match(/^hwp:sec(\d+):tbl(\d+):r(\d+)c(\d+)$/);
+    if (!m) return false;
+    if (sp !== `hwp:sec${m[1]}`) return false;
+    if (Number(m[2]) !== ti) return false;
+    return true;
+}
+
+/**
  * finalize 적용용 location_json 이 최소 기하 정보를 갖추었는지 검사.
  * 잘못된 기본값(0,1)으로 잘못된 셀에 쓰는 것을 방지한다.
  */
 function validateLocationForApply(loc, format) {
     if (!loc || typeof loc !== 'object') return false;
     const sv = Number(loc.schema_version);
+    if (sv === 3) {
+        return validateLocationV3(loc, format);
+    }
     if (sv === 2) {
         return validateLocationV2(loc, format);
     }
@@ -184,6 +212,11 @@ function buildApplyPayload(rows, format, opts = {}) {
             base.absolute_y = loc.absolute_y;
             base.apply_strategy = loc.apply_strategy || 'coord';
             base.section_path = loc.section_path;
+        } else if (Number(loc.schema_version) === 3) {
+            base.schema_version = 3;
+            base.section_path = loc.section_path;
+            base.target_cell_id = loc.target_cell_id;
+            base.apply_strategy = 'cell_id';
         } else if (format === 'hwpx') {
             base.section_path = loc.section_path;
         } else {
@@ -206,4 +239,5 @@ module.exports = {
     FORBIDDEN_KIND,
     validateLocationForApply,
     validateLocationV2,
+    validateLocationV3,
 };

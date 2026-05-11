@@ -13,6 +13,24 @@ const calculateBBox = (lat: number, lng: number, r: number) => {
   return `${lat - latDegree},${lng - lngDegree},${lat + latDegree},${lng + lngDegree}`;
 };
 
+/** 카카오 지도 레벨: 숫자가 작을수록 확대. 최대 확대(1)에서만 개별 라벨 표시 */
+const LAND_PRICE_LEVEL_INDIVIDUAL_MAX = 1;
+const LAND_PRICE_IDLE_DEBOUNCE_MS = 120;
+
+const landPriceCellSizePx = (level: number): number | undefined => {
+  if (level <= LAND_PRICE_LEVEL_INDIVIDUAL_MAX) return undefined;
+  if (level <= 3) return 64;
+  if (level <= 6) return 88;
+  if (level <= 9) return 104;
+  return 136;
+};
+
+const medianNum = (values: number[]): number => {
+  if (values.length === 0) return 0;
+  const s = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid]! : (s[mid - 1]! + s[mid]!) / 2;
+};
 
 const AnalysisPage = () => {
 
@@ -33,6 +51,8 @@ const AnalysisPage = () => {
   const closedPolygonsRef = useRef<any[]>([]); // 블록 폴리곤 저장용 Ref
   const hasHydratedFromStore = useRef(false); // 전역 상태에서 한 번만 복원
   const hasRestoredOverlays = useRef(false);  // 지도 오버레이 복원 여부
+  const landPriceIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rebuildLandPriceOverlaysRef = useRef<() => void>(() => {});
   
   const [showPrompt, setShowPrompt] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
@@ -45,7 +65,10 @@ const AnalysisPage = () => {
   const [selectedLarge, setSelectedLarge] = useState("");
   const [selectedMid, setSelectedMid] = useState("");
   const [selectedSmall, setSelectedSmall] = useState("");
-  const [showLandPrice, setShowLandPrice] = useState(true); 
+  const [showLandPrice, setShowLandPrice] = useState(true);
+  const coordsRef = useRef(coords);
+  const radiusRef = useRef(radius);
+  const showLandPriceRef = useRef(showLandPrice);
   const [showShops, setShowShops] = useState(true);         
   const [showTrades, setShowTrades] = useState(true);
   const [showDashboard, setShowDashboard] = useState(false);
@@ -62,6 +85,10 @@ const AnalysisPage = () => {
   const storedRadius = useAnalysisStore((state) => state.radius);
   const storedAddress = useAnalysisStore((state) => state.address);
   const storedCategory = useAnalysisStore((state) => state.selectedCategory);
+
+  coordsRef.current = coords;
+  radiusRef.current = radius;
+  showLandPriceRef.current = showLandPrice;
 
   // zustand 기반 지원제도 setter (useState API와 동일하게 동작하도록 래핑)
   const setSupportPrograms = (
@@ -270,6 +297,12 @@ const AnalysisPage = () => {
       }
     });
     window.addEventListener('mouseup', () => { isDragging.current = false; });
+    kakao.maps.event.addListener(map, 'idle', () => {
+      if (landPriceIdleTimerRef.current) clearTimeout(landPriceIdleTimerRef.current);
+      landPriceIdleTimerRef.current = setTimeout(() => {
+        rebuildLandPriceOverlaysRef.current();
+      }, LAND_PRICE_IDLE_DEBOUNCE_MS);
+    });
     setIsLoading(false);
   };
 
@@ -324,69 +357,150 @@ const AnalysisPage = () => {
     estateMarkersRef.current.push(marker);
   };
 
-  const displayLandPriceMarkers = (landData: any[]) => {
-    const { kakao } = window;
-    const center = new kakao.maps.LatLng(coords.lat, coords.lng);
+  rebuildLandPriceOverlaysRef.current = () => {
+    const kakao = (window as any).kakao;
+    if (!kakao || !mapInstance.current) return;
 
-    // 1. 현재 반경 내에 있는 데이터들만 먼저 필터링하여 가격 순으로 정렬
+    const map = mapInstance.current;
+    landPriceOverlaysRef.current.forEach((o) => o.setMap(null));
+    landPriceOverlaysRef.current = [];
+
+    const landData = landDataRef.current;
+    if (!showLandPriceRef.current || !Array.isArray(landData) || landData.length === 0) return;
+
+    const cx = coordsRef.current;
+    const rad = radiusRef.current;
+    const center = new kakao.maps.LatLng(cx.lat, cx.lng);
+
     const validData = landData
-      .filter((item) => {
+      .filter((item: any) => {
         const itemPos = new kakao.maps.LatLng(item.lat, item.lng);
         const distance = new kakao.maps.Polyline({ path: [center, itemPos] }).getLength();
-        return distance <= radius && item.jiga > 0;
+        return distance <= rad && item.jiga > 0;
       })
-      .sort((a, b) => a.jiga - b.jiga);
+      .sort((a: any, b: any) => a.jiga - b.jiga);
 
     if (validData.length === 0) return;
-    // 데이터 개수가 적을 때를 대비한 안전한 인덱스 계산
-    const total = validData.length;
-    const lowIdx = Math.max(0, Math.floor(total * 0.33));
-    const highIdx = Math.max(0, Math.floor(total * 0.66));
-    
+
+    const totalPlots = validData.length;
+    const lowIdx = Math.max(0, Math.floor(totalPlots * 0.33));
+    const highIdx = Math.max(0, Math.floor(totalPlots * 0.66));
     const lowThreshold = validData[lowIdx].jiga;
     const highThreshold = validData[highIdx].jiga;
-    
-    validData.forEach((item) => {
-      const itemPos = new kakao.maps.LatLng(item.lat, item.lng);
-      const priceDisplay = Math.round(item.jiga / 10000);
 
-      // 3. 가격대에 따른 색상 결정 (초록, 노랑, 빨강)
-      let borderColor = "#22c55e"; // 기본 초록 (Low)
-      let textColor = "#166534";
-      
-      if (item.jiga >= highThreshold && total >= 3) {
-        borderColor = "#ef4444"; // 빨강
-        textColor = "#991b1b";
-      } else if (item.jiga >= lowThreshold && total >= 2) {
-        borderColor = "#eab308"; // 노랑
-        textColor = "#854d0e";
+    const pickColors = (jiga: number) => {
+      let borderColor = '#22c55e';
+      let textColor = '#166534';
+      if (jiga >= highThreshold && totalPlots >= 3) {
+        borderColor = '#ef4444';
+        textColor = '#991b1b';
+      } else if (jiga >= lowThreshold && totalPlots >= 2) {
+        borderColor = '#eab308';
+        textColor = '#854d0e';
       }
+      return { borderColor, textColor };
+    };
 
+    const manifold = '<span style="font-size:9px;margin-left:1px">만</span>';
+
+    const addOverlay = (lat: number, lng: number, innerHtml: string, fontSizePx: string, jigaForColor: number) => {
+      const { borderColor, textColor } = pickColors(jigaForColor);
       const content = document.createElement('div');
       content.style.cssText = `
-        background: white; 
-        border: 2px solid ${borderColor}; 
-        padding: 2px 6px; 
-        border-radius: 6px; 
-        font-size: 11px; 
-        font-weight: 800; 
-        color: ${textColor}; 
-        box-shadow: 0 2px 5px rgba(0,0,0,0.2); 
+        background: white;
+        border: 2px solid ${borderColor};
+        padding: 2px 6px;
+        border-radius: 6px;
+        font-size: ${fontSizePx};
+        font-weight: 800;
+        color: ${textColor};
+        box-shadow: 0 2px 5px rgba(0,0,0,0.2);
         white-space: nowrap;
       `;
-      content.innerHTML = `${priceDisplay.toLocaleString()}<span style="font-size:9px; margin-left:1px;">만</span>`;
-
+      content.innerHTML = innerHtml;
       const overlay = new kakao.maps.CustomOverlay({
-        position: itemPos,
-        content: content,
+        position: new kakao.maps.LatLng(lat, lng),
+        content,
         xAnchor: 0.5,
         yAnchor: 0.5,
-        zIndex: 1
+        zIndex: 1,
       });
-
-      overlay.setMap(showLandPrice ? mapInstance.current : null);
+      overlay.setMap(map);
       landPriceOverlaysRef.current.push(overlay);
+    };
+
+    const buildLabelSingle = (jiga: number) => {
+      const priceDisplay = Math.round(jiga / 10000);
+      return `${priceDisplay.toLocaleString()}${manifold}`;
+    };
+
+    const buildLabelCluster = (items: any[]) => {
+      const jigas = items.map((i) => i.jiga);
+      const avgJ = jigas.reduce((a, b) => a + b, 0) / jigas.length;
+      const mins = Math.min(...jigas);
+      const maxs = Math.max(...jigas);
+      const avgD = Math.round(avgJ / 10000);
+      const minD = Math.round(mins / 10000);
+      const maxD = Math.round(maxs / 10000);
+      if (items.length === 1 || minD === maxD) {
+        return { html: `${avgD.toLocaleString()}${manifold}`, jigaForColor: avgJ };
+      }
+      return {
+        html: `${avgD.toLocaleString()} <span style="font-weight:700">(${minD.toLocaleString()}~${maxD.toLocaleString()})</span>${manifold}`,
+        jigaForColor: avgJ,
+      };
+    };
+
+    const level = typeof map.getLevel === 'function' ? map.getLevel() : LAND_PRICE_LEVEL_INDIVIDUAL_MAX;
+    const cellPx = landPriceCellSizePx(level);
+
+    if (!cellPx || typeof map.getProjection !== 'function') {
+      validData.forEach((item: any) => {
+        addOverlay(item.lat, item.lng, buildLabelSingle(item.jiga), '11px', item.jiga);
+      });
+      return;
+    }
+
+    const projection = map.getProjection();
+    if (!projection?.pointFromCoords) {
+      validData.forEach((item: any) => {
+        addOverlay(item.lat, item.lng, buildLabelSingle(item.jiga), '11px', item.jiga);
+      });
+      return;
+    }
+
+    const buckets = new Map<string, any[]>();
+
+    validData.forEach((item: any) => {
+      const itemPos = new kakao.maps.LatLng(item.lat, item.lng);
+      let gx = 0;
+      let gy = 0;
+      try {
+        const pt = projection.pointFromCoords(itemPos);
+        gx = Math.floor(pt.x / cellPx);
+        gy = Math.floor(pt.y / cellPx);
+      } catch {
+        gx = Math.floor(item.lat * 10000);
+        gy = Math.floor(item.lng * 10000);
+      }
+      const key = `${gx},${gy}`;
+      const cur = buckets.get(key);
+      if (cur) cur.push(item);
+      else buckets.set(key, [item]);
     });
+
+    buckets.forEach((items) => {
+      const { html, jigaForColor } = buildLabelCluster(items);
+      const latM = medianNum(items.map((i: any) => i.lat));
+      const lngM = medianNum(items.map((i: any) => i.lng));
+      const fontSize = items.length > 1 ? '10px' : '11px';
+      addOverlay(latM, lngM, html, fontSize, jigaForColor);
+    });
+  };
+
+  const displayLandPriceMarkers = (landData: any[]) => {
+    landDataRef.current = landData;
+    rebuildLandPriceOverlaysRef.current();
   };
 
   // 시작
@@ -1160,7 +1274,7 @@ const AnalysisPage = () => {
             kakao.maps.event.addListener(polygon, 'click', (mouseEvent: any) => {
                 const jibunLabel = block.jibun || (block.properties && block.properties.jibun) || '';
                 const content = `
-                    <div style="padding:10px; background:white; border-radius:8px; border:1px solid #ddd; font-size:12px;">
+                    <div style="padding:4px 2px; font-size:12px; line-height:1.45;">
                         <div style="font-weight:bold; margin-bottom:5px;">${jibunLabel}</div>
                         <div style="color:#2563EB;">✔ 영업 중: ${activeCount}곳</div>
                         <div style="color:#DC2626;">✖ 폐업 완료: ${closedCount}곳</div>
@@ -1229,8 +1343,14 @@ const AnalysisPage = () => {
   
   // ... (기타 토글 함수들)
   const toggleLandPrice = () => {
-    const n = !showLandPrice; setShowLandPrice(n);
-    landPriceOverlaysRef.current.forEach(o => o.setMap(n ? mapInstance.current : null)); 
+    const n = !showLandPrice;
+    setShowLandPrice(n);
+    showLandPriceRef.current = n;
+    if (n) {
+      rebuildLandPriceOverlaysRef.current();
+    } else {
+      landPriceOverlaysRef.current.forEach((o) => o.setMap(null));
+    }
   };
   const toggleShops = () => {
     const n = !showShops; 
