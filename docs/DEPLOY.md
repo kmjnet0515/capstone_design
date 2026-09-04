@@ -9,7 +9,7 @@
 | 로컬에서 SSH로 EC2 재시작까지 | `EC2_HOST` `EC2_KEY` 설정 후 **`npm run deploy:ec2`** |
 | CI에서 자동 푸시 | GitHub Secrets에 `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` 추가 후 `main` 푸시 또는 Actions 수동 실행 (`.github/workflows/docker-hub-push.yml`) |
 
-Docker Hub·EC2 계정은 제가 대신 쓸 수 없으므로, 위 명령은 **본인 PC 또는 GitHub**에서 실행해야 합니다.
+위 명령은 Docker Hub·EC2 자격 증명이 필요하므로 **개발 PC 또는 GitHub Actions**에서 실행한다.
 
 ---
 
