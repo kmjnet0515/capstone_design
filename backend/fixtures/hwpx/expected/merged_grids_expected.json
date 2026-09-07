@@ -1,0 +1,39 @@
+{
+  "ok": true,
+  "format": "hwpx",
+  "sections": [
+    {
+      "tables": [
+        {
+          "table_index": 0,
+          "rows": [
+            [
+              "사업명",
+              ""
+            ],
+            [
+              "상세"
+            ]
+          ],
+          "col_counts": [
+            2,
+            1
+          ],
+          "n_rows": 2,
+          "n_cols": 2,
+          "grid_confidence": "high",
+          "rows_text": [
+            [
+              "사업명",
+              ""
+            ],
+            [
+              "",
+              "상세"
+            ]
+          ]
+        }
+      ]
+    }
+  ]
+}

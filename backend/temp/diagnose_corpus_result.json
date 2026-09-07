@@ -1,0 +1,169 @@
+[
+  {
+    "url": "https://www.bizinfo.go.kr/cmm/fms/fileDown.do?atchFileId=FILE_000000000752975&fileSn=3",
+    "fileName": "íìììê³µì¸ í¬ë§ëë°°íµì¥ ì§ìì¬ì ì ì²­ìì.hwp",
+    "ok": true,
+    "format": "hwp",
+    "size": 26624,
+    "total": 7,
+    "byKind": {
+      "table_label": 7
+    },
+    "injectCount": 3,
+    "hintCount": 4,
+    "sectionStats": [
+      {
+        "section": 0,
+        "tables": 10,
+        "fillableSum": 7
+      }
+    ],
+    "repeated": [
+      [
+        "주    소",
+        2
+      ]
+    ]
+  },
+  {
+    "url": "https://www.bizinfo.go.kr/cmm/fms/fileDown.do?atchFileId=FILE_000000000752142&fileSn=1",
+    "fileName": "[ìì1]+ê¸ë¡ë²+ììê³µì¸ì¡ì±ì¬ì+ì¬ìê³íì.hwp",
+    "ok": true,
+    "format": "hwp",
+    "size": 74240,
+    "total": 19,
+    "byKind": {
+      "table_label": 13,
+      "table_transposed": 6
+    },
+    "injectCount": 5,
+    "hintCount": 14,
+    "sectionStats": [
+      {
+        "section": 0,
+        "tables": 5,
+        "fillableSum": 19
+      }
+    ],
+    "repeated": []
+  },
+  {
+    "url": "https://www.bizinfo.go.kr/cmm/fms/fileDown.do?atchFileId=FILE_000000000751705&fileSn=0",
+    "fileName": "2026ë_ììê³µì¸_ì ì±ìê¸_ìµìì¬ì_ê³µê³ _ë³ê²½(2ì°¨).hwpx",
+    "ok": true,
+    "format": "hwpx",
+    "size": 181825,
+    "total": 19,
+    "byKind": {
+      "table_transposed": 8,
+      "table_label": 11
+    },
+    "injectCount": 0,
+    "hintCount": 8,
+    "sectionStats": [
+      {
+        "section": "Contents/section0.xml",
+        "fillableSum": 0
+      }
+    ],
+    "repeated": [
+      [
+        "신청·접수(소진공)",
+        2
+      ],
+      [
+        "지원대상 여부 판단",
+        2
+      ]
+    ]
+  },
+  {
+    "url": "https://www.bizinfo.go.kr/cmm/fms/fileDown.do?atchFileId=FILE_000000000751439&fileSn=0",
+    "fileName": "2026ë_ìê³µì¸_ì¸íë¼ìì¤_ê³ ëí_ì§ìì¬ì_ëª¨ì§ê³µê³ .hwpx",
+    "ok": true,
+    "format": "hwpx",
+    "size": 110564,
+    "total": 102,
+    "byKind": {
+      "table_label": 53,
+      "table_transposed": 49
+    },
+    "injectCount": 0,
+    "hintCount": 24,
+    "sectionStats": [
+      {
+        "section": "Contents/section0.xml",
+        "fillableSum": 0
+      }
+    ],
+    "repeated": [
+      [
+        "목  차",
+        2
+      ],
+      [
+        "20  년   월",
+        6
+      ],
+      [
+        "No.00* 상단 표 번호 반영",
+        2
+      ],
+      [
+        "< 사 진 > 규격",
+        2
+      ],
+      [
+        "< 사 진 > 판매처",
+        2
+      ]
+    ]
+  },
+  {
+    "url": "https://www.bizinfo.go.kr/cmm/fms/fileDown.do?atchFileId=FILE_000000000751396&fileSn=0",
+    "fileName": "2026ëë_ì íµìì¥_ë°_ìì ê°_íì±í_ì ê³µ_í¬ì_ê³í_ê³µê³ .hwpx",
+    "ok": true,
+    "format": "hwpx",
+    "size": 192802,
+    "total": 168,
+    "byKind": {
+      "table_label": 98,
+      "table_transposed": 66,
+      "table_label_vertical": 4
+    },
+    "injectCount": 0,
+    "hintCount": 60,
+    "sectionStats": [
+      {
+        "section": "Contents/section0.xml",
+        "fillableSum": 0
+      },
+      {
+        "section": "Contents/section1.xml",
+        "fillableSum": 0
+      }
+    ],
+    "repeated": [
+      [
+        "주민등록번호",
+        2
+      ],
+      [
+        "추천훈격",
+        2
+      ],
+      [
+        "추천순위",
+        2
+      ],
+      [
+        "공적분야",
+        4
+      ],
+      [
+        "소 속",
+        4
+      ]
+    ]
+  }
+]

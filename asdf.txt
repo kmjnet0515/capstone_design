@@ -1,0 +1,2 @@
+mysql -h db.cfosko28s2rm.ap-northeast-2.rds.amazonaws.com -u MINJAEKIM -p
+258258Jby!

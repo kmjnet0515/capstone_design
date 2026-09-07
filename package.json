@@ -1,0 +1,10 @@
+{
+  "name": "capstone-project",
+  "private": true,
+  "description": "모노레포 루트 — 배포·테스트 단축 명령",
+  "scripts": {
+    "deploy:dockerhub": "bash scripts/dockerhub-build-push.sh",
+    "deploy:ec2": "bash scripts/remote-ec2-restart.sh",
+    "test:pipeline": "npm run test:pipeline --prefix backend"
+  }
+}
